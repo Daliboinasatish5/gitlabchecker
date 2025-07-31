@@ -151,11 +151,16 @@ def check_project_compliance(project, branch=None):
         vscode_content = check_vscode_settings_content(project, branch)
         report["vscode_have_ruff"] = vscode_content["have_ruff"]
         report["vscode_config_exists"] = vscode_content["exists"]
+
+        # Check other vscode config files including tasks.json
         report["vscode_extensions_exists"] = check_vscode_file_exists(
             project, "extensions.json", branch
         )
         report["vscode_launch_exists"] = check_vscode_file_exists(
             project, "launch.json", branch
+        )
+        report["vscode_tasks_exists"] = check_vscode_file_exists(
+            project, "tasks.json", branch
         )
 
         # Templates
@@ -244,7 +249,7 @@ def get_suggestions_for_missing_items(report):
         ),
         (
             "vscode_have_ruff",
-            "Ensure `.vscode/settings.json` includes Ruff as the linter.",
+            "Ensure `.vscode/settings.json` includes Ruff as the linter and make sure you are following correct json format.",
         ),
         (
             "vscode_extensions_exists",
@@ -253,6 +258,10 @@ def get_suggestions_for_missing_items(report):
         (
             "vscode_launch_exists",
             "Add a `.vscode/launch.json` file to configure debug launch profiles in VSCode.",
+        ),
+        (
+            "vscode_tasks_exists",
+            "Add a `.vscode/tasks.json` file to define custom tasks for build, lint, or deployment.",
         ),
         (
             "description_present",
@@ -274,13 +283,13 @@ def get_suggestions_for_missing_items(report):
         "vscode_have_ruff": "vscode-ruff.png",
         "vscode_extensions_exists": "vscode-extensions.png",
         "vscode_launch_exists": "vscode-launch.png",
+        "vscode_tasks_exists": "vscode-tasks.png",
         "description_present": "project-description.png",
         "tags_present": "Tags.png",
     }
 
     st.subheader("📌 Suggestions for Missing Items")
 
-    # Only show files.png if template folders are missing
     show_files_image = not report.get(
         "issue_templates_folder", False
     ) or not report.get("merge_request_templates_folder", False)
@@ -288,7 +297,6 @@ def get_suggestions_for_missing_items(report):
 
     for key, suggestion_text in suggestion_list:
         if not report.get(key, True):  # If missing
-            # Show files.png only once, before first template folder suggestion
             if (
                 key in ["issue_templates_folder", "merge_request_templates_folder"]
                 and show_files_image
@@ -306,7 +314,6 @@ def get_suggestions_for_missing_items(report):
 
             st.markdown(f"❌ **{key}** — {suggestion_text}")
 
-            # Show individual help image
             img_file = image_map.get(key)
             if img_file:
                 try:
@@ -331,6 +338,9 @@ These files help maintain consistent development environment and build configura
 
 - [`.vscode/settings.json`](https://code.visualstudio.com/docs/getstarted/settings)
   Contains workspace-specific editor settings such as Python interpreter path, linters (e.g., Ruff), and environment management (`uv`).
+
+- [`.vscode/tasks.json`](https://code.visualstudio.com/docs/editor/tasks)
+  Defines custom tasks to automate build, test, lint, or deployment commands within VS Code.
 
 - [`pyproject.toml`](https://peps.python.org/pep-0518/)
   Configuration for Python project build system, dependencies, and packaging metadata. Ensures reproducible builds and integration with tools like Poetry or Flit.
@@ -468,6 +478,7 @@ if mode == "Check Project Compliance":
                             "vscode_have_ruff": ".vscode/settings.json have Ruff",
                             "vscode_extensions_exists": ".vscode/extensions.json",
                             "vscode_launch_exists": ".vscode/launch.json",
+                            "vscode_tasks_exists": ".vscode/tasks.json",
                         },
                     }
 
@@ -555,6 +566,10 @@ if mode == "Check Project Compliance":
 - [`.vscode/launch.json`](https://code.visualstudio.com/docs/debugtest/debugging#_before-you-start-debugging)
   Defines debug launch profiles for running and debugging the project inside VSCode.
 """,
+                        "vscode_tasks_exists": """
+- [`.vscode/tasks.json`](https://code.visualstudio.com/docs/editor/tasks)
+  Defines custom tasks to automate build, test, lint, or deployment commands within VS Code.
+""",
                     }
 
                     relevant_keys = [
@@ -563,6 +578,7 @@ if mode == "Check Project Compliance":
                         "vscode_have_ruff",
                         "vscode_extensions_exists",
                         "vscode_launch_exists",
+                        "vscode_tasks_exists",
                     ]
 
                     missing_keys = [
@@ -603,7 +619,6 @@ elif mode == "Check User Profile README":
         if not input_val:
             st.warning("Please enter a username or URL.")
         else:
-            # Reuse existing get_user_from_identifier function
             try:
                 if input_val.isdigit():
                     user = gl.users.get(int(input_val))
@@ -688,6 +703,7 @@ elif mode == "Check User Profile README":
                         st.image("assets/Readme.png")
                     except Exception:
                         pass
+
 
 # ---------- MODE: Get User Info ----------
 elif mode == "Get User Info":
