@@ -1,0 +1,19 @@
+{
+  "name": "gitlab-compliance-checker",
+  "version": "1.0.0",
+  "description": "A Streamlit web application to verify GitLab project best practices and check user profile README status.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://code.swecha.org/tools/gitlab-compliance-checker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@iarna/toml": "^2.2.5"
+  }
+}
