@@ -7,7 +7,9 @@ import streamlit as st
 from dotenv import load_dotenv
 from gitlab import Gitlab, GitlabGetError
 from gitlab.v4.objects import Project
+
 from gitlab_utils.client import GitLabClient  # For user APIs only
+from user_profile.profile_ui import render_user_profile
 
 # Dependency availability
 try:
@@ -48,7 +50,7 @@ else:
 
 
 # --- Optimize: Cache file reads ---
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60) #README content check
 def read_file_content(_project, file_path, ref):
     try:
         file = _project.files.get(file_path=file_path, ref=ref)
@@ -204,7 +206,7 @@ def check_templates_presence(project, branch="main"):
     return result
 
 
-def check_project_compliance(project, branch=None):
+def check_project_compliance(project, branch=None): #README existence & quality
     required_files = {
         "README.md": ["README.md"],
         "CONTRIBUTING.md": ["CONTRIBUTING.md"],
@@ -310,7 +312,7 @@ def patch_gitlab_project():
 patch_gitlab_project()
 
 
-# --- File listing and classification helpers ---
+# Fetches all files in repo
 def list_all_files(project, branch="main"):
     """Return list of file paths (blobs) in the repository (recursive)."""
     try:
@@ -322,6 +324,7 @@ def list_all_files(project, branch="main"):
     files = [item.get("path") for item in items if item.get("type") == "blob"]
     return files
 
+#Detects python files (.py) ,JavaScript / TypeScript files ,Requirement files
 
 def classify_repository_files(file_paths):
     """Classify files into categories and detect language files."""
@@ -506,7 +509,9 @@ def reports_to_excel(rows):
     return buf.getvalue()
 
 
-def extract_path_from_url(input_str):
+def extract_path_from_url(input_str): #Raw project path to GitLab-compatible project identifier
+
+
     try:
         path = urlparse(input_str).path.strip("/")
         return path[:-4] if path.endswith(".git") else path
@@ -941,19 +946,19 @@ if mode == "Check Project Compliance":
 
     # --- Batch Mode: accept multiple projects ---
     st.markdown("---")
-    st.subheader("🔁 Batch Mode: Multiple Projects")
+    st.subheader("🔁 Batch Mode: Multiple Projects") # allow user to move from single to multiple repo
     st.checkbox(
         "Enable batch mode: analyze multiple repositories at once", key="batch_mode_enabled"
     )
     if st.session_state.get("batch_mode_enabled"):
-        batch_input = st.text_area(
+        batch_input = st.text_area(                #Accepts multiple GitLab repositories
             "Enter multiple project paths, URLs, or IDs (one per line)",
             key="batch_projects_input",
             placeholder="group/project or https://gitlab.com/group/project or 12345",
         )
-        run_batch = st.button("Run Batch Compliance & File Analysis", key="run_batch_button")
+        run_batch = st.button("Run Batch Compliance & File Analysis", key="run_batch_button") #Starts batch processing
         if run_batch:
-            lines = [l.strip() for l in (batch_input or "").splitlines() if l.strip()]
+            lines = [l.strip() for l in (batch_input or "").splitlines() if l.strip()] #Converts text area input into list of repos
             if not lines:
                 st.warning(
                     "Please enter at least one project path, URL, or ID for batch processing."
@@ -962,11 +967,11 @@ if mode == "Check Project Compliance":
                 rows = []
                 full_results = []
                 with st.spinner(f"Processing {len(lines)} project(s) ..."):
-                    for line in lines:
+                    for line in lines: #Processes each repository independently
                         path_or_id = extract_path_from_url(line)
                         is_id = path_or_id.isdigit()
                         try:
-                            proj = gl.projects.get(int(path_or_id) if is_id else path_or_id)
+                            proj = gl.projects.get(int(path_or_id) if is_id else path_or_id) #Fetches GitLab project metadata
                         except Exception as e:
                             st.error(f"Project '{path_or_id}' not found: {e}")
                             rows.append(
@@ -1134,7 +1139,7 @@ if mode == "Check Project Compliance":
             run_automatic = len(branches) == 1 and (branches[0] == default_branch)
 
             if run_check or run_automatic:
-                report = check_project_compliance(project=project, branch=selected_branch)
+                report = check_project_compliance(project=project, branch=selected_branch)  #runs full compliance  and checks for the repository
 
                 # Classify repository files and include counts into report for display
                 files_for_classify = list_all_files(project, branch=selected_branch)
@@ -1303,42 +1308,7 @@ elif mode == "User Profile Overview":
             if not user_info:
                 st.stop()
 
-            # Display user info from `client`
-            st.write(
-                f"### User: **{user_info['name']}** (@{user_info['username']}, ID: {user_info['id']})"
-            )
-            if user_info.get("avatar_url"):
-                st.image(user_info["avatar_url"], width=80)
-            st.write(f"[View GitLab Profile]({user_info.get('web_url', '')})")
-
-            # Show stats using `client` APIs
-            st.markdown("#### 📊 Account Statistics")
-            col1, col2 = st.columns(2)
-
-            proj_count = client.users.get_user_project_count(user_info["id"])
-            group_count = client.users.get_user_group_count(user_info["id"])
-            issue_count = client.users.get_user_issue_count(user_info["id"])
-            mr_count = client.users.get_user_mr_count(user_info["id"])
-
-            with col1:
-                st.metric("Projects", proj_count if isinstance(proj_count, int) else "N/A")
-                st.metric("Groups", group_count if isinstance(group_count, int) else "N/A")
-            with col2:
-                st.metric(
-                    "Open Issues",
-                    issue_count if isinstance(issue_count, int) else "N/A",
-                )
-                st.metric("Open MRs", mr_count if isinstance(mr_count, int) else "N/A")
-
-            # Warn if any metric failed
-            for label, count in [
-                ("projects", proj_count),
-                ("groups", group_count),
-                ("issues", issue_count),
-                ("merge requests", mr_count),
-            ]:
-                if isinstance(count, str) and count.startswith("Error:"):
-                    st.warning(f"Could not get {label} count: {count[6:].strip()}")
+            render_user_profile(client, user_info)
 
             # --- Step 2: Check Profile README using `gl` ---
             st.markdown("#### 📄 Profile README Status")
