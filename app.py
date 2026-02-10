@@ -1,6 +1,8 @@
 import csv
 import io
 import os
+import time
+from datetime import time
 from urllib.parse import urlparse
 
 import streamlit as st
@@ -57,6 +59,43 @@ def read_file_content(_project, file_path, ref):
         return file.decode().decode("utf-8")
     except Exception:
         return None
+
+
+# --- Network helper: GitLab get with retries ---
+def get_project_with_retries(gl_client, path_or_id, retries=3, backoff=1):
+    """Attempt to fetch a project from GitLab with retries on transient network errors.
+
+    Returns the project object on success or raises the last exception on failure.
+    """
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            return gl_client.projects.get(
+                int(path_or_id) if str(path_or_id).isdigit() else path_or_id
+            )
+        except GitlabGetError as e:
+            # If it's a 404-like error (project not found), re-raise immediately
+            last_exc = e
+            # GitlabGetError can represent many server-side problems; treat as final for not-found
+            if getattr(e, "response", None) is not None and e.response.status_code == 404:
+                raise
+            if attempt == retries:
+                raise
+        except (
+            ConnectionResetError,
+            ConnectionAbortedError,
+            requests.exceptions.RequestException,
+            OSError,
+            http.client.RemoteDisconnected,
+        ) as e:
+            last_exc = e
+            if attempt == retries:
+                raise
+            sleep_for = backoff * (2 ** (attempt - 1))
+            time.sleep(sleep_for)
+    # If loop exits without returning, raise the last exception
+    if last_exc:
+        raise last_exc
 
 
 # --- Compliance Logic ---
@@ -928,7 +967,7 @@ if mode == "Check Project Compliance":
             path_or_id = extract_path_from_url(input_str)
             is_id = path_or_id.isdigit()
             try:
-                project = gl.projects.get(int(path_or_id) if is_id else path_or_id)
+                project = get_project_with_retries(gl, path_or_id)
                 st.session_state["selected_project_id"] = project.id
                 branches = get_project_branches(project)
                 st.session_state["branches"] = branches
@@ -937,7 +976,8 @@ if mode == "Check Project Compliance":
                 st.session_state["selected_project_id"] = None
                 st.session_state["branches"] = []
             except Exception as e:
-                st.error(f"Unexpected error: {str(e)}")
+                st.error(f"Unexpected error ({type(e).__name__}): {e}")
+                st.info("Check GITLAB_URL, GITLAB_TOKEN, network connectivity, and proxy settings.")
                 st.session_state["selected_project_id"] = None
                 st.session_state["branches"] = []
 
@@ -1109,7 +1149,7 @@ if mode == "Check Project Compliance":
 
     if selected_project_id:
         try:
-            project = gl.projects.get(selected_project_id)
+            project = get_project_with_retries(gl, selected_project_id)
             if not branches:
                 branches = get_project_branches(project)
                 st.session_state["branches"] = branches
@@ -1182,6 +1222,18 @@ if mode == "Check Project Compliance":
                             "vscode_extensions_exists": ".vscode/extensions.json",
                             "vscode_launch_exists": ".vscode/launch.json",
                             "vscode_tasks_exists": ".vscode/tasks.json",
+                        },
+                        "5. 🗂️ File Categories": {
+                            "python_count": "Python files",
+                            "js_count": "JS/TS files",
+                            "java_count": "Java files",
+                            "go_count": "Go files",
+                            "rust_count": "Rust files",
+                            "csharp_count": "C# files",
+                            "detected_languages_list": "Detected Languages",
+                            "common_requirements_list": "Common requirement files",
+                            "project_files_list": "Project files",
+                            "tech_files_list": "Tech / tooling files",
                         },
                     }
                     all_passed = True
@@ -1274,36 +1326,133 @@ if mode == "Check Project Compliance":
                                 if doc_text:
                                     st.markdown(doc_text)
 
+                    # --- Repository file categories & export for single project ---
+                    st.markdown("---")
+                    st.subheader("🧭 Repository File Categories & Export")
+
+                    try:
+                        files = list_all_files(project, branch=selected_branch)
+                        classification = classify_repository_files(files)
+
+                        st.markdown("**Language summary**")
+                        st.write(f"Python files: {len(classification.get('python_files', []))}")
+                        st.write(f"JS/TS files: {len(classification.get('js_files', []))}")
+
+                        with st.expander("Common requirement files", expanded=False):
+                            files = classification.get("common_requirements", [])
+                            if files:
+                                for f in files:
+                                    st.markdown(f"- `{os.path.basename(f)}`")
+                            else:
+                                st.write("None")
+
+                        with st.expander(
+                            "Project files (README, docs, src, tests)", expanded=False
+                        ):
+                            files = classification.get("project_files", [])
+                            if files:
+                                for f in files:
+                                    st.markdown(f"- `{os.path.basename(f)}`")
+                            else:
+                                st.write("None")
+
+                        with st.expander("Tech / tooling files", expanded=False):
+                            files = classification.get("tech_files", [])
+                            if files:
+                                for f in files:
+                                    st.markdown(f"- `{os.path.basename(f)}`")
+                            else:
+                                st.write("None")
+                        files = classification.get("tech_files", [])
+                        if files:
+                            for f in files:
+                                st.markdown(f"- `{os.path.basename(f)}`")
+                        else:
+                            st.write("None")
+                        # README quick summary
+                        st.markdown("**README status**")
+                        st.write(f"Status: {report.get('readme_status', 'missing')}")
+                        readme_score = report.get("readme_quality_score")
+                        if readme_score is not None:
+                            render_readme_quality_progress_bar(readme_score)
+                        if report.get("readme_sections"):
+                            st.write(
+                                f"Detected sections: {', '.join(report.get('readme_sections', []))}"
+                            )
+
+                        # Build a single-row summary for this project
+                        single_row = {
+                            "project_id": project.id,
+                            "path": project.path_with_namespace,
+                            "branch": selected_branch,
+                            "python_count": len(classification.get("python_files", [])),
+                            "js_count": len(classification.get("js_files", [])),
+                            "java_count": len(classification.get("java_files", [])),
+                            "go_count": len(classification.get("go_files", [])),
+                            "rust_count": len(classification.get("rust_files", [])),
+                            "csharp_count": len(classification.get("csharp_files", [])),
+                            "detected_languages": ", ".join(
+                                classification.get("detected_languages", [])
+                            ),
+                            "common_requirements": classification.get("common_requirements", []),
+                            "project_files": classification.get("project_files", []),
+                            "tech_files": classification.get("tech_files", []),
+                            "license_status": report.get("license_status"),
+                            "license_valid": report.get("license_valid"),
+                            "readme_status": report.get("readme_status"),
+                            "readme_quality_score": report.get("readme_quality_score", 0),
+                            "readme_notes": ";".join(report.get("readme_sections", [])),
+                        }
+
+                        try:
+                            excel_bytes = reports_to_excel([single_row])
+                            st.download_button(
+                                "Download Excel for this project",
+                                data=excel_bytes,
+                                file_name=f"{project.path_with_namespace.replace('/', '_')}_report.xlsx",
+                                mime="application/octet-stream",
+                            )
+                        except Exception as e:
+                            st.error(f"Could not create Excel for this project: {e}")
+                            st.info(f"Tip: Install Excel writer support: {EXCEL_PIP_SUGGEST}")
+                            csv_text = reports_to_csv([single_row])
+                            st.warning("Falling back to CSV export.")
+                            st.download_button(
+                                "Download CSV for this project",
+                                data=csv_text,
+                                file_name=f"{project.path_with_namespace.replace('/', '_')}_report.csv",
+                                mime="text/csv",
+                            )
+                    except Exception as e:
+                        st.error(f"Error analyzing repository files: {e}")
+                        st.exception(e)
+
         except Exception as e:
             st.error(f"Error accessing project: {str(e)}")
 
 # ---------- MODE: User Profile Overview ----------
+# ---------- MODE: User Profile Overview ----------
+# ---------- MODE: User Profile Overview ----------
+# ---------- MODE: User Profile Overview ----------
 elif mode == "User Profile Overview":
     st.subheader("👤 User Profile Overview")
+
     user_input = st.text_input(
         "Enter GitLab username, user ID, or profile URL",
         key="user_overview_input",
         on_change=lambda: setattr(st.session_state, "user_overview_triggered", True),
     )
+
     check_triggered = st.session_state.get("user_overview_triggered", False)
     button_clicked = st.button("Fetch User Info & Check README", key="user_overview_button")
 
     if check_triggered or button_clicked:
         st.session_state["user_overview_triggered"] = False
         input_val = user_input.strip()
+
         if not input_val:
             st.warning("Please enter a username, user ID, or profile URL.")
-        else:
-            # --- Step 1: Get User Info using `client` ---
-            try:
-                if input_val.isdigit():
-                    user_info = client.users.get_by_userid(int(input_val))
-                else:
-                    username = extract_path_from_url(input_val)
-                    user_info = client.users.get_by_username(username)
-            except Exception as e:
-                st.error(f"❌ User not found or error (via client): {e}")
-                user_info = None
+            st.stop()
 
             if not user_info:
                 st.stop()
@@ -1364,8 +1513,154 @@ elif mode == "User Profile Overview":
                 url = f"https://{domain}/{profile_project.path_with_namespace}/-/blob/{branch}/README.md"
                 st.markdown(f"[View README]({url})")
             else:
-                st.error("❌ Profile project exists but is missing `README.md`.")
-                try:
-                    st.image("assets/Readme.png", width=400)
-                except Exception:
-                    pass
+                username = extract_path_from_url(input_val)
+                user_info = client.users.get_by_username(username)
+        #    except Exception as e:
+        #         st.error(f"❌ User not found or error: {e}")
+        #             st.stop()
+
+        if not user_info:
+            st.stop()
+
+        # ---------- Display User Info ----------
+        st.markdown(
+            f"### 👤 {user_info['name']}  \n"
+            f"**Username:** @{user_info['username']}  \n"
+            f"**User ID:** {user_info['id']}"
+        )
+
+        if user_info.get("avatar_url"):
+            st.image(user_info["avatar_url"], width=90)
+
+        st.markdown(f"[🔗 View GitLab Profile]({user_info.get('web_url', '')})")
+
+        # ---------- Account Statistics ----------
+        # ---------- Account Statistics ----------
+        st.markdown("## 📊 Account Statistics")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        proj_count = client.users.get_user_project_count(user_info["id"])
+        group_count = client.users.get_user_group_count(user_info["id"])
+
+        open_mr_count = client.users.get_user_opened_mr_count(user_info["id"])
+        closed_mr_count = client.users.get_user_closed_mr_count(user_info["id"])
+        merged_mr_count = client.users.get_user_merged_mr_count(user_info["id"])
+        total_mr_count = client.users.get_user_total_mr_count(user_info["id"])
+
+        with col1:
+            st.metric("📁 Projects", proj_count)
+
+        with col2:
+            st.metric("👥 Groups", group_count)
+
+        with col3:
+            st.metric("🟢 Opened MRs", open_mr_count)
+            st.metric("🔵 Merged MRs", merged_mr_count)
+
+        with col4:
+            st.metric("🔴 Closed MRs", closed_mr_count)
+            st.metric("📊 Total MRs", total_mr_count)
+
+        # ---------- Overall Merge Request Summary Table ----------
+        st.markdown("## 📋 Overall Merge Request Summary")
+
+        overall_mr_table = [
+            {
+                "Opened MRs": open_mr_count,
+                "Closed MRs": closed_mr_count,
+                "Merged MRs": merged_mr_count,
+                "Total MRs": total_mr_count,
+            }
+        ]
+
+        st.table(overall_mr_table)
+
+        # ---------- Project-wise Merge Request Report ----------
+        st.markdown("## 📄 Project-wise Merge Request Report")
+
+        mr_details = client.users.get_user_mr_details(user_info["id"])
+
+        if isinstance(mr_details, list) and mr_details:
+            st.dataframe(mr_details, use_container_width=True, hide_index=True)
+        else:
+            st.info("No merge request data available.")
+
+        # ---------- Today's Merge Request Report ----------
+        st.markdown("## ⏰ Today's Merge Request Summary")
+
+        today_open_mr = client.users.get_today_opened_mr_count(user_info["id"])
+        today_closed_mr = client.users.get_today_closed_mr_count(user_info["id"])
+        today_merged_mr = client.users.get_today_merged_mr_count(user_info["id"])
+
+        today_total_mr = today_open_mr + today_closed_mr + today_merged_mr
+
+        today_mr_table = [
+            {
+                "Today's Opened MRs": today_open_mr,
+                "Today's Closed MRs": today_closed_mr,
+                "Today's Merged MRs": today_merged_mr,
+                "Today's Total MRs": today_total_mr,
+            }
+        ]
+
+        st.table(today_mr_table)
+
+        # ---------- Profile README Status ----------
+
+        # ---------- Profile README Status ----------
+        st.markdown("## 📄 Profile README Status")
+
+        def check_readme_in_project(project):
+            try:
+                branch = getattr(project, "default_branch", "main")
+                tree = project.repository_tree(ref=branch, recursive=False)
+                filenames = [item["name"].lower() for item in tree]
+                return "readme.md" in filenames
+            except Exception:
+                return False
+
+        def check_user_profile_readme(gl_client, username):
+            try:
+                project_path = f"{username}/{username}"
+                profile_project = gl_client.projects.get(project_path)
+
+                if profile_project.namespace["full_path"].lower() == username.lower():
+                    has_readme = check_readme_in_project(profile_project)
+                    return has_readme, profile_project
+            except Exception:
+                pass
+
+            return False, None
+
+        has_readme, profile_project = check_user_profile_readme(gl, user_info["username"])
+
+        if profile_project is None:
+            st.error("❌ No profile README project found.")
+            st.markdown("### 💡 How to fix:")
+            st.markdown("1. Create a project named **same as your username**")
+            st.markdown("2. Add a `README.md` file")
+            st.markdown("3. It will appear on your GitLab profile")
+
+            try:
+                st.image("assets/Readme.png", width=450)
+            except Exception:
+                pass
+
+        elif has_readme:
+            branch = getattr(profile_project, "default_branch", "main")
+            st.success("✅ Profile README is correctly configured!")
+
+            domain = urlparse(URL).netloc
+            url = (
+                f"https://{domain}/{profile_project.path_with_namespace}/-/blob/{branch}/README.md"
+            )
+            st.markdown(f"[🔗 View README]({url})")
+
+        else:
+            st.warning("⚠ Profile project exists but README.md is missing.")
+
+            try:
+                st.image("assets/Readme.png", width=450)
+            except Exception:
+                pass
