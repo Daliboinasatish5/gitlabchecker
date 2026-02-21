@@ -12,6 +12,13 @@ st.set_page_config(
 # Load environment variables
 load_dotenv()
 
+# --- Session State ---
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = None
+
+if "contribution_generated" not in st.session_state:
+    st.session_state.contribution_generated = False
+
 # Import local modules
 try:
     from gitlab_utils.client import GitLabClient
@@ -21,6 +28,7 @@ try:
     from modes.compliance_mode import render_compliance_mode
     from modes.user_profile import render_user_profile
     from modes.batch_mode import render_batch_mode_ui
+    from modes.contribution_mapping import render_contribution_mapping
 
 except ImportError as e:
     st.error(f"Import Error: {e}")
@@ -44,6 +52,7 @@ def main():
         [
             "Check Project Compliance",
             "User Profile Overview",
+            "Contribution Mapping",
             "Batch 2026 ICFAI",
             "Batch 2026 RCTS",
         ],
@@ -86,6 +95,9 @@ def main():
                 render_user_profile(client, user_info)
             else:
                  st.error(f"User '{user_input}' not found.")
+
+    elif mode == "Contribution Mapping":
+        render_contribution_mapping(client)
 
     elif mode == "Batch 2026 ICFAI":
         render_batch_mode_ui(client, "ICFAI")
