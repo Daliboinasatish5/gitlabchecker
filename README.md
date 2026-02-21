@@ -7,6 +7,7 @@ This project helps teams and mentors quickly evaluate whether repositories follo
 ## Demo
 
 - **Live Demo:** Not configured yet
+- **Local Demo:** Run `streamlit run app.py` and open `http://localhost:8501`
 
 ## Features
 
@@ -79,11 +80,44 @@ gitlab-compliance-checker/
 
 Set credentials using either `.env` (local dev) or `.streamlit/secrets.toml`.
 
+### How to Create a GitLab Personal Access Token
+
+1. Sign in to your GitLab account.
+2. Go to **User Settings → Access Tokens**.
+3. Enter a token name (example: `compliance-checker-token`).
+4. Select an expiry date (recommended).
+5. Choose scopes (minimum recommended: `read_api`; if needed, use `api`).
+6. Click **Create personal access token**.
+7. Copy the token immediately and store it safely (GitLab shows it only once).
+
+> ⚠️ Do not commit your token to git. Keep it only in local `.env`, `.streamlit/secrets.toml`, or environment variables.
+
+### Token Creation Process (Quick)
+
+```text
+GitLab Login
+  -> User Settings
+  -> Access Tokens
+  -> Name + Expiry + Scope (read_api/api)
+  -> Create token
+  -> Copy token once
+  -> Paste in .env or .streamlit/secrets.toml
+```
+
 ### Option 1: `.env`
 
 ```env
 GITLAB_URL=https://gitlab.com
 GITLAB_TOKEN=your_personal_access_token
+```
+
+Create the `.env` file in project root:
+
+```bash
+cat > .env << 'EOF'
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=your_personal_access_token
+EOF
 ```
 
 ### Option 2: `.streamlit/secrets.toml`
