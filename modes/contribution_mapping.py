@@ -12,11 +12,11 @@ def calculate_streaks(commits_by_date, start_date, end_date):
     """Calculate longest streak and current streak"""
     if not commits_by_date:
         return 0, 0
-    
+
     current_date = start_date
     current_streak = 0
     longest_streak = 0
-    
+
     while current_date <= end_date:
         date_str = current_date.isoformat()
         if commits_by_date.get(date_str, 0) > 0:
@@ -25,7 +25,7 @@ def calculate_streaks(commits_by_date, start_date, end_date):
         else:
             current_streak = 0
         current_date += timedelta(days=1)
-    
+
     # Calculate current streak (from today backwards)
     current_streak = 0
     check_date = end_date
@@ -36,87 +36,133 @@ def calculate_streaks(commits_by_date, start_date, end_date):
         else:
             break
         check_date -= timedelta(days=1)
-    
+
     return longest_streak, current_streak
 
 
-def create_contribution_calendar_heatmap(commits_by_date, start_date, end_date):
-    """Create a GitHub-style contribution calendar using Plotly"""
-    
-    import calendar
-    
+def create_github_style_calendar(commits_by_date, start_date, end_date):
+    """Create a GitHub-style contribution calendar with months across and days of week down"""
+
     # Create date range
     dates = []
     values = []
     current_date = start_date
-    
+
     while current_date <= end_date:
         date_str = current_date.isoformat()
         count = commits_by_date.get(date_str, 0)
         dates.append(current_date)
         values.append(count)
         current_date += timedelta(days=1)
-    
-    # Create dataframe with week and day info
+
+    # Create dataframe
     df = pd.DataFrame({
-        'date': dates,
+        'date': pd.to_datetime(dates),
         'commits': values,
-        'week': [d.isocalendar()[1] for d in dates],
-        'day': [d.weekday() for d in dates],
-        'day_name': [d.strftime('%a') for d in dates],
-        'month': [d.strftime('%b') for d in dates],
     })
-    
-    # Create heatmap using go.Heatmap
-    # Pivot data: rows = day of week, columns = week number
-    pivot_data = df.pivot_table(
-        values='commits',
-        index='day',
-        columns='week',
-        fill_value=0,
-        aggfunc='first'
-    )
-    
-    # Day names
-    day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-    
-    # Create hover text - match the shape of pivot_data
-    hover_text = []
-    for day_idx in range(7):
-        row_hover = []
-        for week_num in pivot_data.columns:
-            # Find corresponding date
-            matching_dates = df[(df['day'] == day_idx) & (df['week'] == week_num)]
-            if len(matching_dates) > 0:
-                date_val = matching_dates.iloc[0]['date']
-                commits_val = int(matching_dates.iloc[0]['commits'])
-                hover_text_val = f"{date_val.strftime('%Y-%m-%d')}<br>Commits: {commits_val}"
+
+    # Adjust weekday so Sunday is first (GitHub style)
+    df['weekday'] = (df['date'].dt.weekday + 1) % 7  # 0=Sunday, 1=Monday, ..., 6=Saturday
+    df['year_month'] = df['date'].dt.to_period('M')
+    df['week'] = df['date'].dt.isocalendar().week
+    df['year'] = df['date'].dt.isocalendar().year
+    df['year_week'] = df['year'].astype(str) + '-W' + df['week'].astype(str).str.zfill(2)
+
+    # Get unique year-weeks to preserve chronological order
+    unique_weeks = []
+    for _, row in df.iterrows():
+        year_week = row['year_week']
+        if year_week not in unique_weeks:
+            unique_weeks.append(year_week)
+
+    # Create matrix for heatmap (7 rows for days, columns for weeks)
+    z_data = [[] for _ in range(7)]
+    hover_data = [[] for _ in range(7)]
+    month_labels = []
+    month_boundaries = []
+
+    last_month = None
+    col_idx = 0
+
+    for year_week in unique_weeks:
+        week_df = df[df['year_week'] == year_week]
+
+        # Track month boundaries for annotation
+        current_month = week_df.iloc[0]['year_month'] if len(week_df) > 0 else None
+        if current_month != last_month and last_month is not None:
+            month_boundaries.append(col_idx)
+        if current_month != last_month:
+            month_labels.append((col_idx, str(current_month)))
+            last_month = current_month
+
+        # For each day of week (0=Sunday to 6=Saturday)
+        for day_idx in range(7):
+            day_df = week_df[week_df['weekday'] == day_idx]
+
+            if len(day_df) > 0:
+                commits_val = int(day_df.iloc[0]['commits'])
+                date_val = day_df.iloc[0]['date']
+                hover_text = f"{date_val.strftime('%A, %B %d, %Y')}<br>Commits: {commits_val}"
             else:
-                hover_text_val = ""
-            row_hover.append(hover_text_val)
-        hover_text.append(row_hover)
-    
+                commits_val = 0
+                hover_text = f"No contributions"
+
+            z_data[day_idx].append(commits_val)
+            hover_data[day_idx].append(hover_text)
+
+        col_idx += 1
+
+    # Day labels (Sunday to Saturday like GitHub)
+    y_labels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    x_labels = ['' for _ in range(len(unique_weeks))]
+
+    # Create heatmap
     fig = go.Figure(data=go.Heatmap(
-        z=pivot_data.values,
-        x=pivot_data.columns,
-        y=[day_names[i] for i in range(min(len(pivot_data.index), 7))],
+        z=z_data,
+        x=x_labels,
+        y=y_labels,
         colorscale='Greens',
         showscale=True,
-        hovertext=hover_text,
+        hovertext=hover_data,
         hovertemplate='%{hovertext}<extra></extra>',
-        colorbar=dict(title="Commits"),
+        colorbar=dict(title="Commits", thickness=15, len=0.6, y=0.5),
+        xgap=2,
+        ygap=1,
     ))
-    
+
+    # Add month annotations
+    annotations = []
+    for col_idx, month_str in month_labels:
+        month_obj = pd.Period(month_str, freq='M')
+        month_name = month_obj.strftime('%b')
+        annotations.append(
+            dict(
+                x=col_idx,
+                y=-1.2,
+                text=month_name,
+                showarrow=False,
+                xanchor='left',
+                yanchor='top',
+                font=dict(size=11, color='black')
+            )
+        )
+
     fig.update_layout(
-        title="Contribution Calendar",
-        xaxis_title="Week",
-        yaxis_title="Day of Week",
+        title="<b>Contribution Activity</b>",
+        xaxis_title="",
+        yaxis_title="",
         height=300,
-        width=1200,
+        width=1400,
         template='plotly_white',
         hovermode='closest',
+        xaxis=dict(showticklabels=False, showgrid=False),
+        yaxis=dict(autorange="reversed", showgrid=False),
+        margin=dict(l=60, r=80, t=80, b=100),
+        font=dict(size=10),
+        annotations=annotations,
+        plot_bgcolor='white',
     )
-    
+
     return fig
 
 
@@ -143,7 +189,7 @@ def render_contribution_mapping(client):
     col1, col2 = st.columns(2)
 
     today = date.today()
-    default_start = today - timedelta(days=365)
+    default_start = today - timedelta(days=90)  # Last 3 months
 
     with col1:
         start_date = st.date_input("From Date", default_start)
@@ -154,7 +200,7 @@ def render_contribution_mapping(client):
     # Check if dates changed - if so, reset the generated flag
     stored_start = st.session_state.get("map_start_date")
     stored_end = st.session_state.get("map_end_date")
-    
+
     if stored_start and stored_end:
         if start_date != stored_start or end_date != stored_end:
             st.session_state.contribution_generated = False
@@ -280,16 +326,16 @@ def render_contribution_mapping(client):
 
         # --- Display Results ---
 
-        # User Info
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if user_info.get("avatar_url"):
-                st.image(user_info.get("avatar_url"), width=100)
-        with col2:
-            st.markdown(f"### {user_info.get('name')} (@{user_info.get('username')})")
-            st.markdown(f"**ID:** {user_id} | [GitLab Profile]({user_info.get('web_url')})")
+        # # User Info
+        # col1, col2 = st.columns([1, 4])
+        # with col1:
+        #     if user_info.get("avatar_url"):
+        #         st.image(user_info.get("avatar_url"), width=100)
+        # with col2:
+        #     st.markdown(f"### {user_info.get('name')} (@{user_info.get('username')})")
+        #     st.markdown(f"**ID:** {user_id} | [GitLab Profile]({user_info.get('web_url')})")
 
-        st.markdown("---")
+        # st.markdown("---")
 
         # Calculate streaks
         longest_streak, current_streak = calculate_streaks(commits_by_date, filter_start, filter_end)
@@ -297,10 +343,10 @@ def render_contribution_mapping(client):
 
         # Summary Statistics
         st.subheader("📊 Contributions Summary")
-        
+
         # Show date range being viewed
         st.markdown(f"**📅 Viewing:** {filter_start.strftime('%Y-%m-%d')} to {filter_end.strftime('%Y-%m-%d')}")
-        
+
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("Total Commits", total_commits)
@@ -317,45 +363,45 @@ def render_contribution_mapping(client):
 
         # Detailed Date Range Breakdown
         st.subheader("📈 Date Range Breakdown")
-        
+
         breakdown_cols = st.columns(3)
         with breakdown_cols[0]:
             st.write("**Commits by Status:**")
             st.markdown(f"- Total: **{total_commits}**")
             st.markdown(f"- Date Range: **{(filter_end - filter_start).days + 1} days**")
             st.markdown(f"- Avg per day: **{total_commits / max((filter_end - filter_start).days + 1, 1):.1f}**")
-        
+
         with breakdown_cols[1]:
             st.write("**MRs by Status:**")
             st.markdown(f"- Total: **{mr_filtered_stats['total']}**")
             st.markdown(f"- Merged: **{mr_filtered_stats['merged']}**")
             st.markdown(f"- Open: **{mr_filtered_stats['opened']}**")
             st.markdown(f"- Closed: **{mr_filtered_stats['closed']}**")
-        
+
         with breakdown_cols[2]:
             st.write("**Issues by Status:**")
             st.markdown(f"- Total: **{issue_filtered_stats['total']}**")
             st.markdown(f"- Open: **{issue_filtered_stats['opened']}**")
             st.markdown(f"- Closed: **{issue_filtered_stats['closed']}**")
-        
+
         st.markdown("---")
 
         # Daily Contribution Statistics
         st.subheader("📅 Daily Statistics")
-        
+
         # Create daily summary
         daily_summary = []
         current_date = filter_start
         while current_date <= filter_end:
             date_str = current_date.isoformat()
             commit_count = commits_by_date.get(date_str, 0)
-            
+
             # Count MRs on this date
             mr_count = sum(1 for mr in filtered_mrs if pd.to_datetime(mr.get("created_at")).date() == current_date)
-            
+
             # Count Issues on this date
             issue_count = sum(1 for issue in filtered_issues if pd.to_datetime(issue.get("created_at")).date() == current_date)
-            
+
             if commit_count > 0 or mr_count > 0 or issue_count > 0:
                 daily_summary.append({
                     "Date": date_str,
@@ -365,9 +411,9 @@ def render_contribution_mapping(client):
                     "Issues": issue_count,
                     "Total": commit_count + mr_count + issue_count
                 })
-            
+
             current_date += timedelta(days=1)
-        
+
         if daily_summary:
             df_daily = pd.DataFrame(daily_summary)
             st.dataframe(
@@ -379,49 +425,46 @@ def render_contribution_mapping(client):
             st.info("No activity found in the selected date range.")
 
         st.markdown("---")
-        st.subheader("🔥 Contribution Calendar")
+        st.subheader("🔥 Contribution Activity")
+
+        # Calendar heatmap period selector
+        col_heatmap_title, col_heatmap_selector = st.columns([3, 1])
+        with col_heatmap_title:
+            st.markdown("#### Submissions Heat Map")
+        with col_heatmap_selector:
+            heatmap_period = st.selectbox(
+                "Select Period",
+                ["Last 3 Months", "Last 6 Months"],
+                key="heatmap_period_selector",
+                label_visibility="collapsed"
+            )
+
+        # Calculate heatmap date range based on selection
+        heatmap_end = filter_end
+        if heatmap_period == "Last 3 Months":
+            heatmap_start = heatmap_end - timedelta(days=90)
+        else:  # Last 6 Months
+            heatmap_start = heatmap_end - timedelta(days=180)
+
+        # Filter commits for heatmap period
+        heatmap_commits_by_date = {}
+        for date_str, count in commits_by_date.items():
+            date_obj = pd.to_datetime(date_str).date()
+            if heatmap_start <= date_obj <= heatmap_end:
+                heatmap_commits_by_date[date_str] = count
+
         with st.container():
-            if commits_by_date:
-                # Create and display heatmap
-                fig = create_contribution_calendar_heatmap(commits_by_date, filter_start, filter_end)
+            if heatmap_commits_by_date:
+                # Create and display GitHub-style heatmap
+                fig = create_github_style_calendar(heatmap_commits_by_date, heatmap_start, heatmap_end)
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Show max day
-                max_commits_day = max(commits_by_date, key=commits_by_date.get)
-                max_commits_count = commits_by_date[max_commits_day]
+                # Show max day in heatmap period
+                max_commits_day = max(heatmap_commits_by_date, key=heatmap_commits_by_date.get)
+                max_commits_count = heatmap_commits_by_date[max_commits_day]
                 st.info(f"📈 Most active day: **{max_commits_day}** with **{max_commits_count} commits**")
             else:
-                st.warning("No commits found in the selected date range.")
+                st.warning("No commits found in the selected period.")
+
 
         st.markdown("---")
-
-        # Daily Breakdown Table
-        st.subheader("📋 Daily Contribution Breakdown")
-        with st.container():
-            if filtered_commits:
-                # Create a table showing commits per day
-                breakdown_data = []
-                current_date = filter_start
-                while current_date <= filter_end:
-                    date_str = current_date.isoformat()
-                    count = commits_by_date.get(date_str, 0)
-                    if count > 0:  # Only show days with commits
-                        breakdown_data.append({
-                            "Date": date_str,
-                            "Day": current_date.strftime("%A"),
-                            "Commits": count,
-                            "📊": "🟩" * min(count, 15)  # Visual bar
-                        })
-                    current_date += timedelta(days=1)
-
-                if breakdown_data:
-                    df_breakdown = pd.DataFrame(breakdown_data)
-                    st.dataframe(
-                        df_breakdown,
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.info("No days with commits in the selected range.")
-            else:
-                st.info("No commits found in the selected date range.")
