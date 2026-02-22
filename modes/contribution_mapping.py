@@ -4,9 +4,21 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
+import os
 
 from gitlab_utils import users, projects, commits, merge_requests, issues
 from modes.batch_mode import DEFAULT_ICFAI_USERS, DEFAULT_RCTS_USERS
+
+
+# Load team data
+@st.cache_data
+def load_team_data():
+    """Load team and student data from CSV"""
+    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "teams.csv")
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+        return df
+    return pd.DataFrame()
 
 
 def calculate_streaks(commits_by_date, start_date, end_date):
@@ -207,12 +219,12 @@ def render_contribution_mapping(client):
     st.markdown("Visualize user contributions over time with a calendar heatmap view.")
 
     # Username Input - Now with Batch Selection
-    st.subheader("1. Select User/Batch")
-
-    # Step 1: Select Batch or Custom
+    st.subheader("1. Select User/Batch/Team")
+    
+    # Step 1: Select Batch, Team, or Custom
     batch_choice = st.radio(
         "Choose option:",
-        ["Batch 2026 ICFAI", "Batch 2026 RCTS", "Custom Username"],
+        ["Batch 2026 ICFAI", "Batch 2026 RCTS", "Team", "Custom Username"],
         key="contrib_batch_choice"
     )
 
@@ -237,7 +249,39 @@ def render_contribution_mapping(client):
             key="contrib_rcts_user"
         )
         username_input = selected_username
-
+    
+    elif batch_choice == "Team":
+        # Load team data
+        team_df = load_team_data()
+        
+        if not team_df.empty:
+            # Get unique team names
+            team_names = sorted(team_df["Team Name"].unique())
+            
+            selected_team = st.selectbox(
+                "Select Team",
+                team_names,
+                key="contrib_team_selector"
+            )
+            
+            # Get students in selected team
+            team_students = team_df[team_df["Team Name"] == selected_team]
+            student_options = team_students["Student Name"].tolist()
+            
+            selected_student = st.selectbox(
+                "Select Student",
+                student_options,
+                key="contrib_team_student"
+            )
+            
+            # Get GitLab username for selected student
+            student_row = team_students[team_students["Student Name"] == selected_student]
+            if not student_row.empty:
+                username_input = student_row.iloc[0]["GitLab Username"]
+                st.write(f"**Selected:** {selected_student} (@{username_input})")
+        else:
+            st.warning("Team data not available")
+        
     else:  # Custom Username
         username_input = st.text_input(
             "Enter GitLab Username",
