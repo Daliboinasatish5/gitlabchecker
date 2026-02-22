@@ -598,83 +598,179 @@ def render_contribution_mapping(client):
                     filter_start, filter_end, daily_data_for_heatmap, contrib_type
                 )
                 if fig:
-                    # Capture selection from heatmap
-                    selection = st.plotly_chart(
+                    # Add click event handling to Plotly figure
+                    fig.update_layout(
+                        clickmode='event+select'
+                    )
+                    fig.update_traces(
+                        hovertemplate="<b>Date: %{customdata}</b><br>Contributions: %{z}<br><i>Click to view details</i><extra></extra>",
+                        customdata=fig.data[0].customdata if fig.data else None
+                    )
+                    
+                    # Display the heatmap with click support
+                    chart_key = f"heatmap_{contrib_type}"
+                    st.plotly_chart(
                         fig,
                         use_container_width=False,
-                        key=f"heatmap_{contrib_type}",
-                        on_select="rerun",
-                        selection_mode="points"
+                        key=chart_key,
+                        config={"responsive": True, "displayModeBar": False}
                     )
-
-                    # Handle selection explicitly
-                    points = selection.get("selection", {}).get("points", []) if selection else []
-                    if not points:
-                        # Fallback to session state key
-                        state_sel = st.session_state.get(f"heatmap_{contrib_type}")
-                        if state_sel and isinstance(state_sel, dict):
-                            points = state_sel.get("selection", {}).get("points", [])
-
-                    if points:
-                        new_date = points[0].get("customdata")
-                        if new_date:
-                            st.session_state.selected_date = new_date
+                    
+                    # Check if there's click data in session state and process it
+                    if chart_key in st.session_state:
+                        event_data = st.session_state[chart_key]
+                        if event_data and isinstance(event_data, dict):
+                            if "points" in event_data and event_data["points"]:
+                                point = event_data["points"][0]
+                                clicked_date = point.get("customdata")
+                                if clicked_date:
+                                    st.session_state.selected_date = clicked_date
+                
+                    # Manual date selector as reliable fallback
+                    st.markdown("**📋 Or select a date manually:**")
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        manual_date = st.date_input(
+                            "Select date to view contributions",
+                            value=filter_end,
+                            min_value=filter_start,
+                            max_value=filter_end,
+                            key=f"manual_date_{contrib_type}",
+                            label_visibility="collapsed"
+                        )
+                    with col2:
+                        if st.button("View", key=f"view_btn_{contrib_type}", use_container_width=True):
+                            st.session_state.selected_date = manual_date.isoformat()
                 else:
                     st.warning("No data to display.")
             else:
                 st.warning("No contribution data available.")
 
-        # Selected Day Details - GitLab style
+        # Show contributions for selected date - displayed directly below heatmap
         selected_date = st.session_state.get("selected_date")
         if selected_date:
-            st.subheader(f"Contributions for {pd.to_datetime(selected_date).strftime('%b %d, %Y')}")
+            st.markdown(f"**📅 Contributions for {pd.to_datetime(selected_date).strftime('%b %d, %Y')}**")
 
-            with st.spinner("Fetching event details..."):
-                day_start = selected_date
-                day_end = (pd.to_datetime(selected_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+            with st.spinner("Fetching contribution details..."):
+                # Ensure proper date format for API
+                day_start = str(selected_date)  # Format: YYYY-MM-DD
+                selected_date_obj = pd.to_datetime(selected_date).date()
+                
+                try:
+                    # Fetch events for this date
+                    day_end_date = selected_date_obj + timedelta(days=1)
+                    day_end = day_end_date.strftime("%Y-%m-%d")
+                    day_events = users.get_user_events(client, user_id, after=day_start, before=day_end)
+                except Exception as e:
+                    day_events = []
+                
+                # Get commits for this date from filtered_commits
+                day_commits = [c for c in filtered_commits if c.get("date") == selected_date]
 
-                day_events = users.get_user_events(client, user_id, after=day_start, before=day_end)
-
+            # Combine commits and events
+            all_activities = []
+            
+            # Add commits
+            for commit in day_commits:
+                commit_date = pd.to_datetime(commit.get("date"))
+                commit_date_ist = commit_date + timedelta(hours=5, minutes=30)
+                all_activities.append({
+                    "time": commit_date_ist,
+                    "type": "commit",
+                    "message": commit.get("message", ""),
+                    "project": commit.get("project_name", ""),
+                })
+            
+            # Add events
             if day_events:
-                # Group and sort events (newest first)
-                day_events = sorted(day_events, key=lambda x: x.get("created_at"), reverse=True)
-
                 for event in day_events:
                     created_at = pd.to_datetime(event.get("created_at"))
-                    # Convert to IST context (assuming UTC based on GitLab API)
-                    created_at_ist = created_at + timedelta(hours=5, minutes=30)
-                    time_str = created_at_ist.strftime("%I:%M%p").lower()
+                    all_activities.append({
+                        "time": created_at,
+                        "type": "event",
+                        "event": event,
+                    })
+            
+            # Sort by time
+            all_activities = sorted(all_activities, key=lambda x: x["time"])
 
-                    action = event.get("action_name")
-                    target = event.get("target_type")
-                    title = event.get("target_title") or event.get("push_data", {}).get("ref") or ""
+            if all_activities:
+                for activity in all_activities:
+                    time_str = activity["time"].strftime("%I:%M%p").lower()
+                    
+                    if activity["type"] == "commit":
+                        # Display commit
+                        commit_msg = activity["message"][:60] + "..." if len(activity["message"]) > 60 else activity["message"]
+                        st.markdown(f"⏱ {time_str} committed '{commit_msg}' at {activity['project']}")
+                    
+                    else:  # event
+                        event = activity["event"]
+                        action = event.get("action_name", "").lower()
+                        target_type = event.get("target_type", "")
+                        target_iid = event.get("target_iid", "")
+                        target_title = event.get("target_title", "")
+                        
+                        # Project Info
+                        proj_id = event.get("project_id")
+                        p_name = ""
+                        for p in all_projs:
+                            if p.get("id") == proj_id:
+                                p_name = p.get("name_with_namespace", "")
+                                break
 
-                    # Project Info
-                    proj_id = event.get("project_id")
-                    # Try to find project name from existing data if possible, else just ID
-                    p_name = f"Project {proj_id}"
-                    for p in all_projs:
-                        if p.get("id") == proj_id:
-                            p_name = p.get("name_with_namespace")
-                            break
+                        # Build the event description with title
+                        event_description = ""
 
-                    # Formatting logic to match GitLab style
-                    action_msg = action
-                    if action == "pushed to":
-                        ref = event.get("push_data", {}).get("ref")
-                        count = event.get("push_data", {}).get("commit_count", 0)
-                        action_msg = f"pushed to branch **{ref}** ({count} commits)"
-                    elif action == "opened" and target == "MergeRequest":
-                        action_msg = f"opened merge request **!{event.get('target_iid')}**"
-                    elif action == "commented on":
-                        action_msg = f"commented on {target.lower() if target else 'item'} **{event.get('target_iid') or ''}**"
-                    elif action == "accepted" or action == "merged":
-                        action_msg = f"merged merge request **!{event.get('target_iid')}**"
+                        if action == "closed" and target_type == "Issue":
+                            event_description = f"closed issue #{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "opened" and target_type == "Issue":
+                            event_description = f"opened issue #{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "closed" and target_type == "MergeRequest":
+                            event_description = f"closed merge request !{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "merged" and target_type == "MergeRequest":
+                            event_description = f"merged merge request !{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "opened" and target_type == "MergeRequest":
+                            event_description = f"opened merge request !{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "commented on" and target_type == "Issue":
+                            event_description = f"commented on issue #{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "commented on" and target_type == "MergeRequest":
+                            event_description = f"commented on merge request !{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        elif action == "commented on" and target_type == "Note":
+                            event_description = f"commented on note #{target_iid}"
+                        elif action == "pushed":
+                            push_data = event.get("push_data", {})
+                            ref = push_data.get("ref", "").replace("refs/heads/", "")
+                            commit_count = push_data.get("commit_count", 0)
+                            event_description = f"pushed to branch {ref}"
+                            if commit_count > 1:
+                                event_description += f" ({commit_count} commits)"
+                        elif action == "created" and target_type == "MergeRequest":
+                            event_description = f"created merge request !{target_iid}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
+                        else:
+                            # Generic fallback
+                            event_description = f"{action} {target_type.lower()}"
+                            if target_title:
+                                event_description += f" '{target_title}'"
 
-                    st.markdown(f"**{time_str}** — {action_msg} at **{p_name}**")
-                    if title and action != "pushed to":
-                        st.caption(f"&nbsp;&nbsp;&nbsp;&nbsp;{title}")
+                        # Display with icon
+                        st.markdown(f"⏱ {time_str} {event_description} at {p_name}")
 
                 st.markdown("")
             else:
-                st.write("No detailed event history available for this day.")
+                st.write("No contributions found for this day.")
