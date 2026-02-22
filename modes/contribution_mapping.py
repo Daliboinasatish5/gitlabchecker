@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import numpy as np
 
 from gitlab_utils import users, projects, commits, merge_requests, issues
+from modes.batch_mode import DEFAULT_ICFAI_USERS, DEFAULT_RCTS_USERS
 
 
 def calculate_streaks(commits_by_date, start_date, end_date):
@@ -210,11 +211,44 @@ def render_contribution_mapping(client):
 
     st.markdown("---")
 
-    # Username Input
-    st.subheader("1. Select User")
-    username_input = st.text_input(
-        "Enter GitLab Username", placeholder="e.g., johndoe", key="contrib_username"
+    # Username Input - Now with Batch Selection
+    st.subheader("1. Select User/Batch")
+    
+    # Step 1: Select Batch or Custom
+    batch_choice = st.radio(
+        "Choose option:",
+        ["Batch 2026 ICFAI", "Batch 2026 RCTS", "Custom Username"],
+        key="contrib_batch_choice"
     )
+    
+    username_input = ""
+    
+    if batch_choice == "Batch 2026 ICFAI":
+        # Parse ICFAI users
+        icfai_users = [u.strip() for u in DEFAULT_ICFAI_USERS.strip().split('\n') if u.strip()]
+        selected_username = st.selectbox(
+            "Select ICFAI User",
+            icfai_users,
+            key="contrib_icfai_user"
+        )
+        username_input = selected_username
+        
+    elif batch_choice == "Batch 2026 RCTS":
+        # Parse RCTS users
+        rcts_users = [u.strip() for u in DEFAULT_RCTS_USERS.strip().split('\n') if u.strip()]
+        selected_username = st.selectbox(
+            "Select RCTS User",
+            rcts_users,
+            key="contrib_rcts_user"
+        )
+        username_input = selected_username
+        
+    else:  # Custom Username
+        username_input = st.text_input(
+            "Enter GitLab Username",
+            placeholder="e.g., johndoe",
+            key="contrib_custom_username"
+        )
 
     if username_input and not username_input.strip():
         st.warning("Username cannot be empty or only spaces.")
