@@ -78,26 +78,9 @@ def render_contribution_heatmap(start_date, end_date, daily_data, contribution_t
 
             df_all = df_all.merge(df_contrib[["date", "count"]], on="date", how="left")
 
-    df_all["count"] = df_all["count"].fillna(0).astype(int)
+    max_count = max(1, df_all["count"].max())
 
-    max_count = df_all["count"].max()
-
-    def get_color_value(count):
-        if max_count == 0 or count == 0:
-            return 0
-        normalized = count / max_count
-        if normalized <= 0.25:
-            return 0.1
-        elif normalized <= 0.50:
-            return 0.4
-        elif normalized <= 0.75:
-            return 0.7
-        else:
-            return 1.0
-
-    df_all["color_value"] = df_all["count"].apply(get_color_value)
-
-    df_all["weekday"] = df_all["date"].dt.weekday
+    df_all["weekday"] = (df_all["date"].dt.weekday + 1) % 7
     df_all["week"] = df_all["date"].dt.isocalendar().week
     df_all["year"] = df_all["date"].dt.isocalendar().year
     df_all["month"] = df_all["date"].dt.strftime("%b")
@@ -113,7 +96,7 @@ def render_contribution_heatmap(start_date, end_date, daily_data, contribution_t
     pivot_dates = df_all.pivot(index="weekday", columns="week_offset", values="date_str")
     pivot_dates = pivot_dates.reindex(index=[0, 1, 2, 3, 4, 5, 6])
 
-    day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    day_labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
     unique_months = df_all.drop_duplicates(subset=["date"]).copy()
     unique_months = unique_months.sort_values("date")
@@ -131,10 +114,10 @@ def render_contribution_heatmap(start_date, end_date, daily_data, contribution_t
 
     custom_colorscale = [
         [0, "#ebedf0"],
-        [0.1, "#c6e48b"],
-        [0.4, "#7bc96f"],
-        [0.7, "#239a3b"],
-        [1, "#196127"],
+        [0.1, "#ccebff"],
+        [0.4, "#66c2ff"],
+        [0.7, "#0099ff"],
+        [1, "#0055ff"],
     ]
 
     z_data = pivot.values.tolist()
@@ -152,51 +135,65 @@ def render_contribution_heatmap(start_date, end_date, daily_data, contribution_t
             if pd.isna(customdata[i][j]):
                 customdata[i][j] = ""
 
+    fig_width = len(pivot.columns) * 22 + 100
+
     fig = go.Figure(
         data=go.Heatmap(
             z=z_data,
             x=list(pivot.columns),
             y=day_labels,
             colorscale=custom_colorscale,
+            zmin=0,
+            zmax=max_count,
             showscale=False,
             customdata=customdata,
             hovertemplate="Date: %{customdata}<br>Contributions: %{z}<extra></extra>",
-            xgap=1,
-            ygap=1,
+            xgap=2,
+            ygap=2,
         )
     )
 
     fig.update_layout(
-        xaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            showline=False,
-            showticklabels=True,
-            tickmode="array",
-            tickvals=month_ticks,
-            ticktext=month_labels,
-            tickfont=dict(size=11, color="#57606a"),
-            range=[-0.5, len(pivot.columns) - 0.5],
-            side="top",
-        ),
-        yaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            showline=False,
-            showticklabels=True,
-            tickmode="array",
-            tickvals=list(range(7)),
-            ticktext=day_labels,
-            tickfont=dict(size=10, color="#57606a"),
-            range=[-0.5, 6.5],
-            scaleanchor="x",
-            scaleratio=1,
-        ),
-        height=60 + (7 * 20),
-        margin=dict(l=10, r=10, t=20, b=10),
+        xaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showline": False,
+            "showticklabels": True,
+            "tickmode": "array",
+            "tickvals": month_ticks,
+            "ticktext": month_labels,
+            "tickfont": {"size": 11, "color": "#57606a"},
+            "range": [-0.5, len(pivot.columns) - 0.5],
+            "side": "top",
+        },
+        yaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showline": False,
+            "showticklabels": True,
+            "tickmode": "array",
+            "tickvals": list(range(7)),
+            "ticktext": day_labels,
+            "tickfont": {"size": 10, "color": "#57606a"},
+            "range": [6.5, -0.5],
+            "scaleanchor": "x",
+            "scaleratio": 1,
+        },
+        width=fig_width,
+        height=280,
+        margin={"l": 50, "r": 20, "t": 40, "b": 20},
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
         hovermode="closest",
+        clickmode="event+select",
+        modebar_remove=[
+            "zoom",
+            "pan",
+            "select",
+            "lasso2d",
+            "autoScale2d",
+            "resetScale2d",
+        ],
     )
 
     return fig
@@ -209,20 +206,18 @@ def render_contribution_mapping(client):
     st.title("Contribution Mapping")
     st.markdown("Visualize user contributions over time with a calendar heatmap view.")
 
-    st.markdown("---")
-
     # Username Input - Now with Batch Selection
     st.subheader("1. Select User/Batch")
-    
+
     # Step 1: Select Batch or Custom
     batch_choice = st.radio(
         "Choose option:",
         ["Batch 2026 ICFAI", "Batch 2026 RCTS", "Custom Username"],
         key="contrib_batch_choice"
     )
-    
+
     username_input = ""
-    
+
     if batch_choice == "Batch 2026 ICFAI":
         # Parse ICFAI users
         icfai_users = [u.strip() for u in DEFAULT_ICFAI_USERS.strip().split('\n') if u.strip()]
@@ -232,7 +227,7 @@ def render_contribution_mapping(client):
             key="contrib_icfai_user"
         )
         username_input = selected_username
-        
+
     elif batch_choice == "Batch 2026 RCTS":
         # Parse RCTS users
         rcts_users = [u.strip() for u in DEFAULT_RCTS_USERS.strip().split('\n') if u.strip()]
@@ -242,7 +237,7 @@ def render_contribution_mapping(client):
             key="contrib_rcts_user"
         )
         username_input = selected_username
-        
+
     else:  # Custom Username
         username_input = st.text_input(
             "Enter GitLab Username",
@@ -267,12 +262,21 @@ def render_contribution_mapping(client):
         end_date = st.date_input("To Date", today)
 
     # Check if dates changed - if so, reset the generated flag
+    if "selected_date" not in st.session_state:
+        st.session_state.selected_date = None
+
+    stored_user = st.session_state.get("map_username")
+    if stored_user and username_input and username_input.strip() != stored_user:
+        st.session_state.contribution_generated = False
+        st.session_state.selected_date = None
+
     stored_start = st.session_state.get("map_start_date")
     stored_end = st.session_state.get("map_end_date")
 
     if stored_start and stored_end:
         if start_date != stored_start or end_date != stored_end:
             st.session_state.contribution_generated = False
+            st.session_state.selected_date = None
 
     # Validation
     valid_range = True
@@ -298,8 +302,6 @@ def render_contribution_mapping(client):
             st.session_state.map_start_date = start_date
             st.session_state.map_end_date = end_date
             st.session_state.contribution_generated = True
-
-    st.markdown("---")
 
     # Fetch and Display Data
     if st.session_state.get("contribution_generated", False):
@@ -378,10 +380,11 @@ def render_contribution_mapping(client):
             except:
                 pass
 
-        # Aggregate commits by date
-        commits_by_date = defaultdict(int)
+        # Aggregate contributions by date for heatmap
+        commits_by_date = {}
         for commit in filtered_commits:
-            commits_by_date[commit["date"]] += 1
+            dk = commit["date"]
+            commits_by_date[dk] = commits_by_date.get(dk, 0) + 1
 
         # --- Display Results ---
 
@@ -551,10 +554,83 @@ def render_contribution_mapping(client):
                     filter_start, filter_end, daily_data_for_heatmap, contrib_type
                 )
                 if fig:
-                    st.plotly_chart(fig, use_container_width=True, key=f"heatmap_{contrib_type}")
+                    # Capture selection from heatmap
+                    selection = st.plotly_chart(
+                        fig,
+                        use_container_width=False,
+                        key=f"heatmap_{contrib_type}",
+                        on_select="rerun",
+                        selection_mode="points"
+                    )
+
+                    # Handle selection explicitly
+                    points = selection.get("selection", {}).get("points", []) if selection else []
+                    if not points:
+                        # Fallback to session state key
+                        state_sel = st.session_state.get(f"heatmap_{contrib_type}")
+                        if state_sel and isinstance(state_sel, dict):
+                            points = state_sel.get("selection", {}).get("points", [])
+
+                    if points:
+                        new_date = points[0].get("customdata")
+                        if new_date:
+                            st.session_state.selected_date = new_date
                 else:
                     st.warning("No data to display.")
             else:
                 st.warning("No contribution data available.")
 
-        st.markdown("---")
+        # Selected Day Details - GitLab style
+        selected_date = st.session_state.get("selected_date")
+        if selected_date:
+            st.subheader(f"Contributions for {pd.to_datetime(selected_date).strftime('%b %d, %Y')}")
+
+            with st.spinner("Fetching event details..."):
+                day_start = selected_date
+                day_end = (pd.to_datetime(selected_date) + timedelta(days=1)).strftime("%Y-%m-%d")
+
+                day_events = users.get_user_events(client, user_id, after=day_start, before=day_end)
+
+            if day_events:
+                # Group and sort events (newest first)
+                day_events = sorted(day_events, key=lambda x: x.get("created_at"), reverse=True)
+
+                for event in day_events:
+                    created_at = pd.to_datetime(event.get("created_at"))
+                    # Convert to IST context (assuming UTC based on GitLab API)
+                    created_at_ist = created_at + timedelta(hours=5, minutes=30)
+                    time_str = created_at_ist.strftime("%I:%M%p").lower()
+
+                    action = event.get("action_name")
+                    target = event.get("target_type")
+                    title = event.get("target_title") or event.get("push_data", {}).get("ref") or ""
+
+                    # Project Info
+                    proj_id = event.get("project_id")
+                    # Try to find project name from existing data if possible, else just ID
+                    p_name = f"Project {proj_id}"
+                    for p in all_projs:
+                        if p.get("id") == proj_id:
+                            p_name = p.get("name_with_namespace")
+                            break
+
+                    # Formatting logic to match GitLab style
+                    action_msg = action
+                    if action == "pushed to":
+                        ref = event.get("push_data", {}).get("ref")
+                        count = event.get("push_data", {}).get("commit_count", 0)
+                        action_msg = f"pushed to branch **{ref}** ({count} commits)"
+                    elif action == "opened" and target == "MergeRequest":
+                        action_msg = f"opened merge request **!{event.get('target_iid')}**"
+                    elif action == "commented on":
+                        action_msg = f"commented on {target.lower() if target else 'item'} **{event.get('target_iid') or ''}**"
+                    elif action == "accepted" or action == "merged":
+                        action_msg = f"merged merge request **!{event.get('target_iid')}**"
+
+                    st.markdown(f"**{time_str}** — {action_msg} at **{p_name}**")
+                    if title and action != "pushed to":
+                        st.caption(f"&nbsp;&nbsp;&nbsp;&nbsp;{title}")
+
+                st.markdown("")
+            else:
+                st.write("No detailed event history available for this day.")
