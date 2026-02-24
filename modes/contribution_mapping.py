@@ -1,12 +1,11 @@
-from datetime import date, timedelta
-from collections import defaultdict
-import pandas as pd
-import streamlit as st
-import plotly.graph_objects as go
-import numpy as np
 import os
+from datetime import date, timedelta
 
-from gitlab_utils import users, projects, commits, merge_requests, issues
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from gitlab_utils import commits, issues, merge_requests, projects, users
 from modes.batch_mode import DEFAULT_ICFAI_USERS, DEFAULT_RCTS_USERS
 
 
@@ -53,7 +52,7 @@ def calculate_streaks(commits_by_date, start_date, end_date):
     return longest_streak, current_streak
 
 
-def render_contribution_heatmap(start_date, end_date, daily_data, contribution_type="total"):
+def render_contribution_heatmap(start_date, end_date, daily_data, contribution_type="total"):  # noqa: C901
     """
     Render contribution heatmap with GitHub-style calendar layout.
 
@@ -211,7 +210,7 @@ def render_contribution_heatmap(start_date, end_date, daily_data, contribution_t
     return fig
 
 
-def render_contribution_mapping(client):
+def render_contribution_mapping(client):  # noqa: C901
     """
     Renders the Contribution Mapping UI with calendar heatmap visualization.
     """
@@ -220,73 +219,57 @@ def render_contribution_mapping(client):
 
     # Username Input - Now with Batch Selection
     st.subheader("1. Select User/Batch/Team")
-    
+
     # Step 1: Select Batch, Team, or Custom
     batch_choice = st.radio(
         "Choose option:",
         ["Batch 2026 ICFAI", "Batch 2026 RCTS", "Team", "Custom Username"],
-        key="contrib_batch_choice"
+        key="contrib_batch_choice",
     )
 
     username_input = ""
 
     if batch_choice == "Batch 2026 ICFAI":
         # Parse ICFAI users
-        icfai_users = [u.strip() for u in DEFAULT_ICFAI_USERS.strip().split('\n') if u.strip()]
-        selected_username = st.selectbox(
-            "Select ICFAI User",
-            icfai_users,
-            key="contrib_icfai_user"
-        )
+        icfai_users = [u.strip() for u in DEFAULT_ICFAI_USERS.strip().split("\n") if u.strip()]
+        selected_username = st.selectbox("Select ICFAI User", icfai_users, key="contrib_icfai_user")
         username_input = selected_username
 
     elif batch_choice == "Batch 2026 RCTS":
         # Parse RCTS users
-        rcts_users = [u.strip() for u in DEFAULT_RCTS_USERS.strip().split('\n') if u.strip()]
-        selected_username = st.selectbox(
-            "Select RCTS User",
-            rcts_users,
-            key="contrib_rcts_user"
-        )
+        rcts_users = [u.strip() for u in DEFAULT_RCTS_USERS.strip().split("\n") if u.strip()]
+        selected_username = st.selectbox("Select RCTS User", rcts_users, key="contrib_rcts_user")
         username_input = selected_username
-    
+
     elif batch_choice == "Team":
         # Load team data
         team_df = load_team_data()
-        
+
         if not team_df.empty:
             # Get unique team names
             team_names = sorted(team_df["Team Name"].unique())
-            
-            selected_team = st.selectbox(
-                "Select Team",
-                team_names,
-                key="contrib_team_selector"
-            )
-            
-            # Get students in selected team
+
+            selected_team = st.selectbox("Select Team", team_names, key="contrib_team_selector")
+
+            # Get all students in selected team
             team_students = team_df[team_df["Team Name"] == selected_team]
-            student_options = team_students["Student Name"].tolist()
-            
-            selected_student = st.selectbox(
-                "Select Student",
-                student_options,
-                key="contrib_team_student"
-            )
-            
-            # Get GitLab username for selected student
-            student_row = team_students[team_students["Student Name"] == selected_student]
-            if not student_row.empty:
-                username_input = student_row.iloc[0]["GitLab Username"]
-                st.write(f"**Selected:** {selected_student} (@{username_input})")
+            student_names = team_students["Student Name"].tolist()
+            usernames = team_students["GitLab Username"].tolist()
+
+            # Store team members info for later use
+            if not team_students.empty:
+                st.write(f"**Team:** {selected_team}")
+                st.write(f"**Members:** {', '.join(student_names)}")
+                # Store username list as comma-separated string for batch processing
+                username_input = ",".join(usernames)
+            else:
+                st.warning("No students found in selected team")
         else:
             st.warning("Team data not available")
-        
+
     else:  # Custom Username
         username_input = st.text_input(
-            "Enter GitLab Username",
-            placeholder="e.g., johndoe",
-            key="contrib_custom_username"
+            "Enter GitLab Username", placeholder="e.g., johndoe", key="contrib_custom_username"
         )
 
     if username_input and not username_input.strip():
@@ -345,6 +328,7 @@ def render_contribution_mapping(client):
             st.session_state.map_username = username_input.strip()
             st.session_state.map_start_date = start_date
             st.session_state.map_end_date = end_date
+            st.session_state.is_team_mode = batch_choice == "Team"
             st.session_state.contribution_generated = True
 
     # Fetch and Display Data
@@ -352,83 +336,121 @@ def render_contribution_mapping(client):
         username = st.session_state.get("map_username", "")
         filter_start = st.session_state.get("map_start_date")
         filter_end = st.session_state.get("map_end_date")
+        is_team_mode = st.session_state.get("is_team_mode", False)
 
-        with st.spinner(f"Fetching contribution data for '{username}'..."):
-            # Get user info
-            user_info = users.get_user_by_username(client, username)
+        # Handle multiple usernames for team mode
+        usernames_list = (
+            [u.strip() for u in username.split(",") if u.strip()] if is_team_mode else [username]
+        )
 
-            if not user_info:
-                st.error(f"❌ User '{username}' not found.")
-                st.session_state.contribution_generated = False
-                return
+        with st.spinner("Fetching contribution data..."):
+            # Dictionary to store data for each user
+            all_users_data = {}
 
-            user_id = user_info.get("id")
+            for user_username in usernames_list:
+                # Get user info
+                user_info = users.get_user_by_username(client, user_username)
 
-            # Fetch all necessary data
-            proj_data = projects.get_user_projects(client, user_id, username)
-            all_projs = proj_data["all"]
+                if not user_info:
+                    st.error(f"❌ User '{user_username}' not found.")
+                    continue
 
-            # Get commits
-            all_commits, commit_counts, commit_stats = commits.get_user_commits(
-                client, user_info, all_projs
-            )
+                user_id = user_info.get("id")
 
-            # Get MRs
-            user_mrs, mr_stats = merge_requests.get_user_mrs(client, user_id)
+                # Fetch all necessary data
+                proj_data = projects.get_user_projects(client, user_id, user_username)
+                all_projs = proj_data["all"]
 
-            # Get Issues
-            user_issues, issue_stats = issues.get_user_issues(client, user_id)
+                # Get commits
+                all_commits, commit_counts, commit_stats = commits.get_user_commits(
+                    client, user_info, all_projs
+                )
+
+                # Get MRs
+                user_mrs, mr_stats = merge_requests.get_user_mrs(client, user_id)
+
+                # Get Issues
+                user_issues, issue_stats = issues.get_user_issues(client, user_id)
+
+                # Store in dictionary
+                all_users_data[user_username] = {
+                    "info": user_info,
+                    "user_id": user_id,
+                    "projects": all_projs,
+                    "commits": all_commits,
+                    "mrs": user_mrs,
+                    "issues": user_issues,
+                }
 
         # Filter commits by date range
-        filtered_commits = []
-        for commit in all_commits:
-            try:
-                commit_date = pd.to_datetime(commit["date"]).date()
-                if filter_start <= commit_date <= filter_end:
-                    filtered_commits.append(commit)
-            except:
-                pass
+        all_filtered_commits = []
+        all_filtered_mrs = []
+        all_filtered_issues = []
 
-        # Filter MRs by date range
-        filtered_mrs = []
-        mr_filtered_stats = {"total": 0, "merged": 0, "closed": 0, "opened": 0, "pending": 0}
-        for mr in user_mrs:
-            try:
-                mr_date = pd.to_datetime(mr.get("created_at")).date()
-                if filter_start <= mr_date <= filter_end:
-                    filtered_mrs.append(mr)
-                    mr_filtered_stats["total"] += 1
-                    if mr.get("state") == "merged":
-                        mr_filtered_stats["merged"] += 1
-                    elif mr.get("state") == "closed":
-                        mr_filtered_stats["closed"] += 1
-                    elif mr.get("state") == "opened":
-                        mr_filtered_stats["opened"] += 1
-                        mr_filtered_stats["pending"] += 1
-            except:
-                pass
+        for user_username, user_data in all_users_data.items():
+            all_commits = user_data["commits"]
+            user_mrs = user_data["mrs"]
+            user_issues = user_data["issues"]
 
-        # Filter Issues by date range
-        filtered_issues = []
-        issue_filtered_stats = {"total": 0, "opened": 0, "closed": 0}
-        for issue in user_issues:
-            try:
-                issue_date = pd.to_datetime(issue.get("created_at")).date()
-                if filter_start <= issue_date <= filter_end:
-                    filtered_issues.append(issue)
-                    issue_filtered_stats["total"] += 1
-                    if issue.get("state") == "opened":
-                        issue_filtered_stats["opened"] += 1
-                    elif issue.get("state") == "closed":
-                        issue_filtered_stats["closed"] += 1
-            except:
-                pass
+            # Filter commits by date range
+            for commit in all_commits:
+                try:
+                    commit_date = pd.to_datetime(commit["date"]).date()
+                    if filter_start <= commit_date <= filter_end:
+                        commit["username"] = user_username  # Add username to commit
+                        all_filtered_commits.append(commit)
+                except Exception:
+                    pass
+
+            # Filter MRs by date range
+            for mr in user_mrs:
+                try:
+                    mr_date = pd.to_datetime(mr.get("created_at")).date()
+                    if filter_start <= mr_date <= filter_end:
+                        mr["username"] = user_username  # Add username to MR
+                        all_filtered_mrs.append(mr)
+                except Exception:
+                    pass
+
+            # Filter Issues by date range
+            for issue in user_issues:
+                try:
+                    issue_date = pd.to_datetime(issue.get("created_at")).date()
+                    if filter_start <= issue_date <= filter_end:
+                        issue["username"] = user_username  # Add username to issue
+                        all_filtered_issues.append(issue)
+                except Exception:
+                    pass
+
+        filtered_commits = all_filtered_commits
+        filtered_mrs = all_filtered_mrs
+        filtered_issues = all_filtered_issues
 
         # Aggregate contributions by date for heatmap
         commits_by_date = {}
+        mr_filtered_stats = {"total": 0, "merged": 0, "closed": 0, "opened": 0, "pending": 0}
+        issue_filtered_stats = {"total": 0, "opened": 0, "closed": 0}
+
         for commit in filtered_commits:
             dk = commit["date"]
             commits_by_date[dk] = commits_by_date.get(dk, 0) + 1
+
+        for mr in filtered_mrs:
+            mr_filtered_stats["total"] += 1
+            if mr.get("state") == "merged":
+                mr_filtered_stats["merged"] += 1
+            elif mr.get("state") == "closed":
+                mr_filtered_stats["closed"] += 1
+            elif mr.get("state") == "opened":
+                mr_filtered_stats["opened"] += 1
+                mr_filtered_stats["pending"] += 1
+
+        for issue in filtered_issues:
+            issue_filtered_stats["total"] += 1
+            if issue.get("state") == "opened":
+                issue_filtered_stats["opened"] += 1
+            elif issue.get("state") == "closed":
+                issue_filtered_stats["closed"] += 1
 
         # --- Display Results ---
 
@@ -454,8 +476,14 @@ def render_contribution_mapping(client):
 
         # Show date range being viewed
         st.markdown(
-            f"**📅 Viewing:** {filter_start.strftime('%Y-%m-%d')} to {filter_end.strftime('%Y-%m-%d')}"
+            f"**📅 Viewing:** {filter_start.strftime('%Y-%m-%d')} to "
+            f"{filter_end.strftime('%Y-%m-%d')}"
         )
+
+        # Show team members if in team mode
+        if is_team_mode:
+            team_members = [u.strip() for u in username.split(",") if u.strip()]
+            st.markdown(f"**👥 Team Members:** {', '.join([f'@{u}' for u in team_members])}")
 
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
@@ -471,6 +499,29 @@ def render_contribution_mapping(client):
 
         st.markdown("---")
 
+        # Show per-member breakdown if in team mode
+        if is_team_mode:
+            st.subheader("👥 Per-Member Breakdown")
+            team_members = [u.strip() for u in username.split(",") if u.strip()]
+
+            member_cols = st.columns(len(team_members))
+            for idx, member_username in enumerate(team_members):
+                member_commits = [
+                    c for c in filtered_commits if c.get("username") == member_username
+                ]
+                member_mrs = [mr for mr in filtered_mrs if mr.get("username") == member_username]
+                member_issues = [
+                    issue for issue in filtered_issues if issue.get("username") == member_username
+                ]
+
+                with member_cols[idx]:
+                    st.markdown(f"**@{member_username}**")
+                    st.metric("Commits", len(member_commits))
+                    st.metric("MRs", len(member_mrs))
+                    st.metric("Issues", len(member_issues))
+
+            st.markdown("---")
+
         # Detailed Date Range Breakdown
         st.subheader("📈 Date Range Breakdown")
 
@@ -479,9 +530,8 @@ def render_contribution_mapping(client):
             st.write("**Commits by Status:**")
             st.markdown(f"- Total: **{total_commits}**")
             st.markdown(f"- Date Range: **{(filter_end - filter_start).days + 1} days**")
-            st.markdown(
-                f"- Avg per day: **{total_commits / max((filter_end - filter_start).days + 1, 1):.1f}**"
-            )
+            avg_per_day = total_commits / max((filter_end - filter_start).days + 1, 1)
+            st.markdown(f"- Avg per day: **{avg_per_day:.1f}**")
 
         with breakdown_cols[1]:
             st.write("**MRs by Status:**")
@@ -501,46 +551,99 @@ def render_contribution_mapping(client):
         # Daily Contribution Statistics
         st.subheader("📅 Daily Statistics")
 
-        # Create daily summary
-        daily_summary = []
-        current_date = filter_start
-        while current_date <= filter_end:
-            date_str = current_date.isoformat()
-            commit_count = commits_by_date.get(date_str, 0)
+        if is_team_mode:
+            # Show detailed breakdown per team member
+            team_members = [u.strip() for u in username.split(",") if u.strip()]
+            st.markdown("**Breakdown by member:**")
 
-            # Count MRs on this date
-            mr_count = sum(
-                1
-                for mr in filtered_mrs
-                if pd.to_datetime(mr.get("created_at")).date() == current_date
-            )
+            for member_username in team_members:
+                with st.expander(f"@{member_username}"):
+                    daily_summary = []
+                    current_date = filter_start
+                    while current_date <= filter_end:
+                        date_str = current_date.isoformat()
 
-            # Count Issues on this date
-            issue_count = sum(
-                1
-                for issue in filtered_issues
-                if pd.to_datetime(issue.get("created_at")).date() == current_date
-            )
+                        # Count contributions for this member
+                        member_commits = sum(
+                            1
+                            for c in filtered_commits
+                            if c.get("username") == member_username and c.get("date") == date_str
+                        )
+                        member_mrs = sum(
+                            1
+                            for mr in filtered_mrs
+                            if mr.get("username") == member_username
+                            and pd.to_datetime(mr.get("created_at")).date() == current_date
+                        )
+                        member_issues = sum(
+                            1
+                            for issue in filtered_issues
+                            if issue.get("username") == member_username
+                            and pd.to_datetime(issue.get("created_at")).date() == current_date
+                        )
 
-            if commit_count > 0 or mr_count > 0 or issue_count > 0:
-                daily_summary.append(
-                    {
-                        "Date": date_str,
-                        "Day": current_date.strftime("%A"),
-                        "Commits": commit_count,
-                        "MRs": mr_count,
-                        "Issues": issue_count,
-                        "Total": commit_count + mr_count + issue_count,
-                    }
+                        if member_commits > 0 or member_mrs > 0 or member_issues > 0:
+                            daily_summary.append(
+                                {
+                                    "Date": date_str,
+                                    "Day": current_date.strftime("%A"),
+                                    "Commits": member_commits,
+                                    "MRs": member_mrs,
+                                    "Issues": member_issues,
+                                    "Total": member_commits + member_mrs + member_issues,
+                                }
+                            )
+
+                        current_date += timedelta(days=1)
+
+                    if daily_summary:
+                        df_daily = pd.DataFrame(daily_summary)
+                        st.dataframe(df_daily, use_container_width=True, hide_index=True)
+                    else:
+                        st.info(
+                            f"No activity found for @{member_username} in the selected date range."
+                        )
+        else:
+            # Original single-user daily summary
+            daily_summary = []
+            current_date = filter_start
+            while current_date <= filter_end:
+                date_str = current_date.isoformat()
+                commit_count = commits_by_date.get(date_str, 0)
+
+                # Count MRs on this date
+                mr_count = sum(
+                    1
+                    for mr in filtered_mrs
+                    if pd.to_datetime(mr.get("created_at")).date() == current_date
                 )
 
-            current_date += timedelta(days=1)
+                # Count Issues on this date
+                issue_count = sum(
+                    1
+                    for issue in filtered_issues
+                    if pd.to_datetime(issue.get("created_at")).date() == current_date
+                )
 
-        if daily_summary:
-            df_daily = pd.DataFrame(daily_summary)
-            st.dataframe(df_daily, use_container_width=True, hide_index=True)
-        else:
-            st.info("No activity found in the selected date range.")
+                if commit_count > 0 or mr_count > 0 or issue_count > 0:
+                    daily_summary.append(
+                        {
+                            "Date": date_str,
+                            "Day": current_date.strftime("%A"),
+                            "Commits": commit_count,
+                            "MRs": mr_count,
+                            "Issues": issue_count,
+                            "Total": commit_count + mr_count + issue_count,
+                        }
+                    )
+
+                current_date += timedelta(days=1)
+
+            if daily_summary:
+                df_daily = pd.DataFrame(daily_summary)
+                st.dataframe(df_daily, use_container_width=True, hide_index=True)
+            else:
+                st.info("No activity found in the selected date range.")
 
         st.markdown("---")
         st.subheader("🔥 Contribution Activity")
@@ -599,23 +702,25 @@ def render_contribution_mapping(client):
                 )
                 if fig:
                     # Add click event handling to Plotly figure
-                    fig.update_layout(
-                        clickmode='event+select'
+                    fig.update_layout(clickmode="event+select")
+                    hover_template = (
+                        "<b>Date: %{customdata}</b><br>Contributions: %{z}<br>"
+                        "<i>Click to view details</i><extra></extra>"
                     )
                     fig.update_traces(
-                        hovertemplate="<b>Date: %{customdata}</b><br>Contributions: %{z}<br><i>Click to view details</i><extra></extra>",
-                        customdata=fig.data[0].customdata if fig.data else None
+                        hovertemplate=hover_template,
+                        customdata=fig.data[0].customdata if fig.data else None,
                     )
-                    
+
                     # Display the heatmap with click support
                     chart_key = f"heatmap_{contrib_type}"
                     st.plotly_chart(
                         fig,
                         use_container_width=False,
                         key=chart_key,
-                        config={"responsive": True, "displayModeBar": False}
+                        config={"responsive": True, "displayModeBar": False},
                     )
-                    
+
                     # Check if there's click data in session state and process it
                     if chart_key in st.session_state:
                         event_data = st.session_state[chart_key]
@@ -625,7 +730,7 @@ def render_contribution_mapping(client):
                                 clicked_date = point.get("customdata")
                                 if clicked_date:
                                     st.session_state.selected_date = clicked_date
-                
+
                     # Manual date selector as reliable fallback
                     st.markdown("**📋 Or select a date manually:**")
                     col1, col2 = st.columns([3, 1])
@@ -636,10 +741,12 @@ def render_contribution_mapping(client):
                             min_value=filter_start,
                             max_value=filter_end,
                             key=f"manual_date_{contrib_type}",
-                            label_visibility="collapsed"
+                            label_visibility="collapsed",
                         )
                     with col2:
-                        if st.button("View", key=f"view_btn_{contrib_type}", use_container_width=True):
+                        if st.button(
+                            "View", key=f"view_btn_{contrib_type}", use_container_width=True
+                        ):
                             st.session_state.selected_date = manual_date.isoformat()
                 else:
                     st.warning("No data to display.")
@@ -649,67 +756,81 @@ def render_contribution_mapping(client):
         # Show contributions for selected date - displayed directly below heatmap
         selected_date = st.session_state.get("selected_date")
         if selected_date:
-            st.markdown(f"**📅 Contributions for {pd.to_datetime(selected_date).strftime('%b %d, %Y')}**")
+            st.markdown(
+                f"**📅 Contributions for {pd.to_datetime(selected_date).strftime('%b %d, %Y')}**"
+            )
 
             with st.spinner("Fetching contribution details..."):
                 # Ensure proper date format for API
                 day_start = str(selected_date)  # Format: YYYY-MM-DD
                 selected_date_obj = pd.to_datetime(selected_date).date()
-                
+
                 try:
                     # Fetch events for this date
                     day_end_date = selected_date_obj + timedelta(days=1)
                     day_end = day_end_date.strftime("%Y-%m-%d")
-                    day_events = users.get_user_events(client, user_id, after=day_start, before=day_end)
-                except Exception as e:
+                    day_events = users.get_user_events(
+                        client, user_id, after=day_start, before=day_end
+                    )
+                except Exception:
                     day_events = []
-                
+
                 # Get commits for this date from filtered_commits
                 day_commits = [c for c in filtered_commits if c.get("date") == selected_date]
 
             # Combine commits and events
             all_activities = []
-            
+
             # Add commits
             for commit in day_commits:
                 commit_date = pd.to_datetime(commit.get("date"))
                 commit_date_ist = commit_date + timedelta(hours=5, minutes=30)
-                all_activities.append({
-                    "time": commit_date_ist,
-                    "type": "commit",
-                    "message": commit.get("message", ""),
-                    "project": commit.get("project_name", ""),
-                })
-            
+                all_activities.append(
+                    {
+                        "time": commit_date_ist,
+                        "type": "commit",
+                        "message": commit.get("message", ""),
+                        "project": commit.get("project_name", ""),
+                    }
+                )
+
             # Add events
             if day_events:
                 for event in day_events:
                     created_at = pd.to_datetime(event.get("created_at"))
-                    all_activities.append({
-                        "time": created_at,
-                        "type": "event",
-                        "event": event,
-                    })
-            
+                    all_activities.append(
+                        {
+                            "time": created_at,
+                            "type": "event",
+                            "event": event,
+                        }
+                    )
+
             # Sort by time
             all_activities = sorted(all_activities, key=lambda x: x["time"])
 
             if all_activities:
                 for activity in all_activities:
                     time_str = activity["time"].strftime("%I:%M%p").lower()
-                    
+
                     if activity["type"] == "commit":
                         # Display commit
-                        commit_msg = activity["message"][:60] + "..." if len(activity["message"]) > 60 else activity["message"]
-                        st.markdown(f"⏱ {time_str} committed '{commit_msg}' at {activity['project']}")
-                    
+                        commit_msg = (
+                            activity["message"][:60] + "..."
+                            if len(activity["message"]) > 60
+                            else activity["message"]
+                        )
+                        st.markdown(
+                            f"⏱ {time_str} committed '{commit_msg}' at {activity['project']}"
+                        )
+
                     else:  # event
                         event = activity["event"]
                         action = event.get("action_name", "").lower()
                         target_type = event.get("target_type", "")
                         target_iid = event.get("target_iid", "")
                         target_title = event.get("target_title", "")
-                        
+
                         # Project Info
                         proj_id = event.get("project_id")
                         p_name = ""
