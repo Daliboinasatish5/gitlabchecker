@@ -730,6 +730,7 @@ def render_contribution_mapping(client):  # noqa: C901
                                 clicked_date = point.get("customdata")
                                 if clicked_date:
                                     st.session_state.selected_date = clicked_date
+                                    st.rerun()
 
                     # Manual date selector as reliable fallback
                     st.markdown("**📋 Or select a date manually:**")
@@ -760,138 +761,92 @@ def render_contribution_mapping(client):  # noqa: C901
                 f"**📅 Contributions for {pd.to_datetime(selected_date).strftime('%b %d, %Y')}**"
             )
 
-            with st.spinner("Fetching contribution details..."):
-                # Ensure proper date format for API
-                day_start = str(selected_date)  # Format: YYYY-MM-DD
-                selected_date_obj = pd.to_datetime(selected_date).date()
+            # Get commits for this date from filtered_commits
+            day_commits = [c for c in filtered_commits if c.get("date") == selected_date]
 
-                try:
-                    # Fetch events for this date
-                    day_end_date = selected_date_obj + timedelta(days=1)
-                    day_end = day_end_date.strftime("%Y-%m-%d")
-                    day_events = users.get_user_events(
-                        client, user_id, after=day_start, before=day_end
-                    )
-                except Exception:
-                    day_events = []
+            # Get MRs for this date
+            day_mrs = [
+                mr
+                for mr in filtered_mrs
+                if pd.to_datetime(mr.get("created_at")).date()
+                == pd.to_datetime(selected_date).date()
+            ]
 
-                # Get commits for this date from filtered_commits
-                day_commits = [c for c in filtered_commits if c.get("date") == selected_date]
+            # Get Issues for this date
+            day_issues = [
+                issue
+                for issue in filtered_issues
+                if pd.to_datetime(issue.get("created_at")).date()
+                == pd.to_datetime(selected_date).date()
+            ]
 
-            # Combine commits and events
-            all_activities = []
+            # Display summary with buttons to filter
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button(
+                    f"📝 Commits ({len(day_commits)})",
+                    key="btn_commits",
+                    use_container_width=True,
+                ):
+                    st.session_state.view_type = "commits"
+            with col2:
+                if st.button(
+                    f"🔀 Merge Requests ({len(day_mrs)})",
+                    key="btn_mrs",
+                    use_container_width=True,
+                ):
+                    st.session_state.view_type = "mrs"
+            with col3:
+                if st.button(
+                    f"❓ Issues ({len(day_issues)})",
+                    key="btn_issues",
+                    use_container_width=True,
+                ):
+                    st.session_state.view_type = "issues"
 
-            # Add commits
-            for commit in day_commits:
-                commit_date = pd.to_datetime(commit.get("date"))
-                commit_date_ist = commit_date + timedelta(hours=5, minutes=30)
-                all_activities.append(
-                    {
-                        "time": commit_date_ist,
-                        "type": "commit",
-                        "message": commit.get("message", ""),
-                        "project": commit.get("project_name", ""),
-                    }
-                )
+            st.markdown("---")
 
-            # Add events
-            if day_events:
-                for event in day_events:
-                    created_at = pd.to_datetime(event.get("created_at"))
-                    all_activities.append(
-                        {
-                            "time": created_at,
-                            "type": "event",
-                            "event": event,
-                        }
-                    )
+            # Get the selected view type (default to commits)
+            view_type = st.session_state.get("view_type", "commits")
 
-            # Sort by time
-            all_activities = sorted(all_activities, key=lambda x: x["time"])
-
-            if all_activities:
-                for activity in all_activities:
-                    time_str = activity["time"].strftime("%I:%M%p").lower()
-
-                    if activity["type"] == "commit":
-                        # Display commit
-                        commit_msg = (
-                            activity["message"][:60] + "..."
-                            if len(activity["message"]) > 60
-                            else activity["message"]
+            # Display only the selected type
+            if view_type == "commits":
+                if day_commits:
+                    st.markdown(f"### 📝 Commits ({len(day_commits)})")
+                    for idx, commit in enumerate(day_commits, 1):
+                        st.markdown(f"**{idx}. {commit.get('message', 'No message')}**")
+                        st.caption(
+                            f"🔗 {commit.get('project_name', 'Unknown Project')} | "
+                            f"🔤 {commit.get('id', 'N/A')[:8]}"
                         )
-                        st.markdown(
-                            f"⏱ {time_str} committed '{commit_msg}' at {activity['project']}"
-                        )
+                        st.markdown("")
+                else:
+                    st.info("No commits on this date")
 
-                    else:  # event
-                        event = activity["event"]
-                        action = event.get("action_name", "").lower()
-                        target_type = event.get("target_type", "")
-                        target_iid = event.get("target_iid", "")
-                        target_title = event.get("target_title", "")
+            elif view_type == "mrs":
+                if day_mrs:
+                    st.markdown(f"### 🔀 Merge Requests ({len(day_mrs)})")
+                    for idx, mr in enumerate(day_mrs, 1):
+                        mr_iid = mr.get("iid", "N/A")
+                        mr_title = mr.get("title", "No title")
+                        mr_state = mr.get("state", "unknown").upper()
+                        st.markdown(f"**{idx}. !{mr_iid} - {mr_title}**")
+                        st.caption(f"Status: `{mr_state}`")
+                        st.markdown("")
+                else:
+                    st.info("No merge requests on this date")
 
-                        # Project Info
-                        proj_id = event.get("project_id")
-                        p_name = ""
-                        for p in all_projs:
-                            if p.get("id") == proj_id:
-                                p_name = p.get("name_with_namespace", "")
-                                break
+            elif view_type == "issues":
+                if day_issues:
+                    st.markdown(f"### ❓ Issues ({len(day_issues)})")
+                    for idx, issue in enumerate(day_issues, 1):
+                        issue_iid = issue.get("iid", "N/A")
+                        issue_title = issue.get("title", "No title")
+                        issue_state = issue.get("state", "unknown").upper()
+                        st.markdown(f"**{idx}. #{issue_iid} - {issue_title}**")
+                        st.caption(f"Status: `{issue_state}`")
+                        st.markdown("")
+                else:
+                    st.info("No issues on this date")
 
-                        # Build the event description with title
-                        event_description = ""
-
-                        if action == "closed" and target_type == "Issue":
-                            event_description = f"closed issue #{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "opened" and target_type == "Issue":
-                            event_description = f"opened issue #{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "closed" and target_type == "MergeRequest":
-                            event_description = f"closed merge request !{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "merged" and target_type == "MergeRequest":
-                            event_description = f"merged merge request !{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "opened" and target_type == "MergeRequest":
-                            event_description = f"opened merge request !{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "commented on" and target_type == "Issue":
-                            event_description = f"commented on issue #{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "commented on" and target_type == "MergeRequest":
-                            event_description = f"commented on merge request !{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        elif action == "commented on" and target_type == "Note":
-                            event_description = f"commented on note #{target_iid}"
-                        elif action == "pushed":
-                            push_data = event.get("push_data", {})
-                            ref = push_data.get("ref", "").replace("refs/heads/", "")
-                            commit_count = push_data.get("commit_count", 0)
-                            event_description = f"pushed to branch {ref}"
-                            if commit_count > 1:
-                                event_description += f" ({commit_count} commits)"
-                        elif action == "created" and target_type == "MergeRequest":
-                            event_description = f"created merge request !{target_iid}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-                        else:
-                            # Generic fallback
-                            event_description = f"{action} {target_type.lower()}"
-                            if target_title:
-                                event_description += f" '{target_title}'"
-
-                        # Display with icon
-                        st.markdown(f"⏱ {time_str} {event_description} at {p_name}")
-
-                st.markdown("")
-            else:
-                st.write("No contributions found for this day.")
+            st.markdown("")
