@@ -52,6 +52,36 @@ def calculate_streaks(commits_by_date, start_date, end_date):
     return longest_streak, current_streak
 
 
+@st.cache_data
+def fetch_user_info_cached(_client, user_username):
+    """Cache user info lookup"""
+    return users.get_user_by_username(_client, user_username)
+
+
+@st.cache_data
+def fetch_user_projects_cached(_client, user_id, user_username):
+    """Cache user projects lookup"""
+    return projects.get_user_projects(_client, user_id, user_username)
+
+
+@st.cache_data
+def fetch_user_commits_cached(_client, user_info, all_projs):
+    """Cache user commits lookup"""
+    return commits.get_user_commits(_client, user_info, all_projs)
+
+
+@st.cache_data
+def fetch_user_mrs_cached(_client, user_id):
+    """Cache user merge requests lookup"""
+    return merge_requests.get_user_mrs(_client, user_id)
+
+
+@st.cache_data
+def fetch_user_issues_cached(_client, user_id):
+    """Cache user issues lookup"""
+    return issues.get_user_issues(_client, user_id)
+
+
 def render_contribution_heatmap(start_date, end_date, daily_data, contribution_type="total"):  # noqa: C901
     """
     Render contribution heatmap with GitHub-style calendar layout.
@@ -348,8 +378,8 @@ def render_contribution_mapping(client):  # noqa: C901
             all_users_data = {}
 
             for user_username in usernames_list:
-                # Get user info
-                user_info = users.get_user_by_username(client, user_username)
+                # Get user info (cached)
+                user_info = fetch_user_info_cached(client, user_username)
 
                 if not user_info:
                     st.error(f"❌ User '{user_username}' not found.")
@@ -357,20 +387,20 @@ def render_contribution_mapping(client):  # noqa: C901
 
                 user_id = user_info.get("id")
 
-                # Fetch all necessary data
-                proj_data = projects.get_user_projects(client, user_id, user_username)
+                # Fetch all necessary data (cached)
+                proj_data = fetch_user_projects_cached(client, user_id, user_username)
                 all_projs = proj_data["all"]
 
-                # Get commits
-                all_commits, commit_counts, commit_stats = commits.get_user_commits(
+                # Get commits (cached)
+                all_commits, commit_counts, commit_stats = fetch_user_commits_cached(
                     client, user_info, all_projs
                 )
 
-                # Get MRs
-                user_mrs, mr_stats = merge_requests.get_user_mrs(client, user_id)
+                # Get MRs (cached)
+                user_mrs, mr_stats = fetch_user_mrs_cached(client, user_id)
 
-                # Get Issues
-                user_issues, issue_stats = issues.get_user_issues(client, user_id)
+                # Get Issues (cached)
+                user_issues, issue_stats = fetch_user_issues_cached(client, user_id)
 
                 # Store in dictionary
                 all_users_data[user_username] = {

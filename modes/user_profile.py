@@ -1,8 +1,10 @@
-import streamlit as st
 import pandas as pd
-from gitlab_utils import users, projects, commits, groups, merge_requests, issues
+import streamlit as st
 
-def render_user_profile(client, simple_user_info):
+from gitlab_utils import commits, groups, issues, merge_requests, projects
+
+
+def render_user_profile(client, simple_user_info):  # noqa: C901
     """
     Renders the User Profile UI.
     """
@@ -32,12 +34,14 @@ def render_user_profile(client, simple_user_info):
 
         # 2. Commits - Passing full simple_user_info
         all_projs = proj_data["all"]
-        all_commits, commit_counts, commit_stats = commits.get_user_commits(client, simple_user_info, all_projs)
+        all_commits, commit_counts, commit_stats = commits.get_user_commits(
+            client, simple_user_info, all_projs
+        )
 
         verified_contributed = []
         for p in proj_data["contributed"]:
-             if commit_counts.get(p['id'], 0) > 0:
-                 verified_contributed.append(p)
+            if commit_counts.get(p["id"], 0) > 0:
+                verified_contributed.append(p)
 
         personal_projects = proj_data["personal"]
 
@@ -65,7 +69,7 @@ def render_user_profile(client, simple_user_info):
     with p_col2:
         st.metric("Contributed Projects", len(verified_contributed))
         if verified_contributed:
-             with st.expander("View Contributed Projects"):
+            with st.expander("View Contributed Projects"):
                 for p in verified_contributed:
                     st.write(f"- [{p['name_with_namespace']}]({p['web_url']})")
 
@@ -82,7 +86,9 @@ def render_user_profile(client, simple_user_info):
             # Use pandas for table
             df_commits = pd.DataFrame(all_commits)
             # Display updated columns
-            st.dataframe(df_commits[["project_name", "message", "date", "time", "slot"]], width="stretch")
+            st.dataframe(
+                df_commits[["project_name", "message", "date", "time", "slot"]], width="stretch"
+            )
 
     # Groups
     st.markdown("---")

@@ -1,7 +1,9 @@
-import streamlit as st
-import pandas as pd
-import io
 import datetime
+import io
+
+import pandas as pd
+import streamlit as st
+
 from gitlab_utils import batch
 
 DEFAULT_ICFAI_USERS = """saikrishna_b
@@ -42,6 +44,7 @@ Kaveri_Mamidi
 dasari_Askhaya
 Ashritha_P"""
 
+
 def render_batch_mode_ui(client, report_type):
     st.subheader(f"🚀 Batch Analytics - {report_type}")
 
@@ -51,7 +54,7 @@ def render_batch_mode_ui(client, report_type):
         "Enter Usernames (one per line)",
         height=300,
         value=default_value,
-        placeholder="user1\nuser2\n..."
+        placeholder="user1\nuser2\n...",
     )
 
     if st.button("Run Batch Analysis"):
@@ -79,9 +82,11 @@ def render_batch_mode_ui(client, report_type):
             projects = data.get("projects", {})
 
             # Stats Access
-            c_stats = data.get("commit_stats", {"total":0, "morning_commits":0, "afternoon_commits":0})
-            m_stats = data.get("mr_stats", {"total":0, "merged":0, "opened":0, "closed":0})
-            i_stats = data.get("issue_stats", {"total":0, "opened":0, "closed":0})
+            c_stats = data.get(
+                "commit_stats", {"total": 0, "morning_commits": 0, "afternoon_commits": 0}
+            )
+            m_stats = data.get("mr_stats", {"total": 0, "merged": 0, "opened": 0, "closed": 0})
+            i_stats = data.get("issue_stats", {"total": 0, "opened": 0, "closed": 0})
 
             p_personal = len(projects.get("personal", []))
             p_contributed = len(projects.get("contributed", []))
@@ -92,7 +97,9 @@ def render_batch_mode_ui(client, report_type):
             row["Status"] = status
 
             # Add Generation Timestamp
-            now_ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+            now_ist = datetime.datetime.now(
+                datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+            )
             row["Report Date"] = now_ist.strftime("%Y-%m-%d")
             row["Report Time"] = now_ist.strftime("%I:%M %p")
 
@@ -123,7 +130,7 @@ def render_batch_mode_ui(client, report_type):
                     row["Morning Active"] = "Yes" if c_stats["morning_commits"] > 0 else "No"
                     row["Afternoon Active"] = "Yes" if c_stats["afternoon_commits"] > 0 else "No"
             else:
-                 row["Error"] = err
+                row["Error"] = err
 
             report_data.append(row)
 
@@ -135,24 +142,26 @@ def render_batch_mode_ui(client, report_type):
         # Export
         try:
             output = io.BytesIO()
-            now_ist = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+            now_ist = datetime.datetime.now(
+                datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+            )
             today = now_ist.strftime("%Y-%m-%d")
             filename = f"{report_type}_Report_{today}.xlsx"
 
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
                 # Sheet 1: Report
-                df_report.to_excel(writer, index=False, sheet_name='Report')
+                df_report.to_excel(writer, index=False, sheet_name="Report")
 
                 # Sheet 2: Raw Errors (if any)
                 errors = [r for r in report_data if r.get("Status") == "Error"]
                 if errors:
-                    pd.DataFrame(errors).to_excel(writer, index=False, sheet_name='Errors')
+                    pd.DataFrame(errors).to_excel(writer, index=False, sheet_name="Errors")
 
             st.download_button(
                 label=f"Download {report_type} Report",
                 data=output.getvalue(),
                 file_name=filename,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
         except Exception as e:
